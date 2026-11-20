@@ -1,14 +1,17 @@
 <p align="center"><img src="assets/brand/serra-lockup.png" alt="Serra" width="360"></p>
 
-# Serra: your own Slack engineering teammate
+# Serra: your local coding agents, from the chat you already use
 
-Serra connects a Slack bot to [T3 Code](https://github.com/pingdotgg/t3code) on your Mac. When someone mentions the bot or sends it a DM, Serra starts a T3 thread in a fresh Git worktree of your repository. The coding agent does the work there (answers a question, fixes a bug, opens a draft PR) and its reply goes back to the Slack thread. Follow-ups in the thread continue the same T3 conversation.
+Serra is a bridge between your team chat and the coding agents on your Mac. It connects a chat bot to [T3 Code](https://github.com/pingdotgg/t3code), so the agent you already use there (Claude, Codex, …) can take requests from chat. When someone mentions the bot or sends it a DM, Serra starts a T3 thread in a fresh Git worktree of your repository. The coding agent does the work there (answers a question, fixes a bug, opens a draft PR) and its reply goes back to the chat thread. Follow-ups in the thread continue the same T3 conversation.
 
-Each engineer runs their own bot: their own Slack app, their own machine, their own GitHub login. Settings, tokens, knowledge and job state live in a private **profile** folder outside this checkout.
+**Chat channels:** Slack is supported today, and it is the only one in this alpha. Discord, Telegram and others are planned; Serra is being built so the channel is your choice. Everything below sets up Serra with Slack.
+
+Each engineer runs their own bot: their own chat app (a Slack app today), their own machine, their own GitHub login. Settings, tokens, knowledge and job state live in a private **profile** folder outside this checkout.
 
 > **Alpha.** Serra is early software, shared so people can try it locally. Expect rough edges and breaking changes between versions. See [Limits](#alpha-limits) before you point it at a repository that matters.
 
 - [Requirements](#requirements)
+- [Chat channels](#chat-channels)
 - [Quick start](#quick-start)
 - [Run it in the background](#run-it-in-the-background)
 - [The desktop app (optional)](#the-desktop-app-optional)
@@ -27,9 +30,16 @@ Each engineer runs their own bot: their own Slack app, their own machine, their 
 | Git and the GitHub CLI, signed in | The agent commits, pushes and opens PRs as you. | `gh auth status` |
 | [T3 Code](https://github.com/pingdotgg/t3code) running, with its `t3` command line (`t3 thread …`, `t3 project …`) | Serra starts and reads T3 threads through it. Default path `~/.t3/bin/t3`. | `~/.t3/bin/t3 thread list --json` |
 | A coding provider signed in inside T3 Code (Claude, Codex, …) | T3 runs the actual agent. | Start a thread in T3 by hand |
-| Permission to create a Slack app in your workspace | Each bot is its own Slack app. Ask an admin if app approval is required. | — |
+| Permission to create a Slack app in your workspace | Slack is the chat channel Serra supports today, and each bot is its own Slack app. Ask an admin if app approval is required. | — |
 
 Your target repository must be a Git checkout with a remote (normally `origin` on GitHub), registered as a project in T3 Code (add it in the T3 Code app, or run `~/.t3/bin/t3 project add /path/to/repo`), and have Git `user.name` and `user.email` set.
+
+## Chat channels
+
+| Channel | Status |
+|---|---|
+| Slack | Supported (Socket Mode, so no public URL to host) |
+| Others (Discord, Telegram, …) | Planned, not in this alpha. Tell us which one you want in an issue. |
 
 ## Quick start
 
@@ -56,7 +66,7 @@ The profile is created at `~/.local/share/serra/<bot-id>` (setup prints the path
 
 > Use `pnpm run setup` and `pnpm run doctor` with `run`: `pnpm setup` and `pnpm doctor` are pnpm's own built-in commands.
 
-### 3. Create the Slack app
+### 3. Create the Slack app (your chat channel)
 
 1. Go to [api.slack.com/apps](https://api.slack.com/apps) → **Create New App** → **From a manifest**, and pick your workspace.
 2. Paste the contents of your profile's `manifest.json` (it is [`manifest.yaml`](manifest.yaml) with your bot's name filled in).
@@ -161,6 +171,7 @@ Everything about a bot lives in its profile folder:
 
 ## Alpha limits
 
+- Slack is the only chat channel so far. Other channels are planned; profile fields like the owner's Slack member ID may change shape when they arrive.
 - macOS only for the service and the app. One bot per Slack app; one profile per bot.
 - The bot acts with **your** GitHub credentials and your T3 Code provider. Anyone on the allowed list can ask it to read your repository and open PRs as you. Keep the allowed list short.
 - Your machine and T3 Code must stay on for the bot to answer. Messages sent while it is down aren't replayed.
@@ -205,4 +216,4 @@ pnpm app:dev     # build and run the app from the checkout
 
 Tests use temporary profiles, a fake `t3` and a simulated service driver. See [CONTRIBUTING.md](CONTRIBUTING.md). Report security issues privately as described in [SECURITY.md](SECURITY.md).
 
-Serra is released under the [MIT License](LICENSE). It isn't affiliated with Slack or T3 Code.
+Serra is released under the [MIT License](LICENSE). It isn't affiliated with Slack, T3 Code or any other chat or agent vendor.

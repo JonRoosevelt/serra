@@ -1,6 +1,6 @@
 # Security policy
 
-Serra runs a coding agent on your machine, with your GitHub credentials, on requests that arrive from Slack. Please report anything that lets someone get more out of it than the README promises.
+Serra runs a coding agent on your machine, with your GitHub credentials, on requests that arrive from a chat channel (Slack, the only one so far). Please report anything that lets someone get more out of it than the README promises.
 
 ## Reporting a vulnerability
 
@@ -19,7 +19,7 @@ You should get an answer within a week. Serra is an alpha maintained in spare ti
 ## Out of scope
 
 - What the coding agent does inside a task it was legitimately given. Limit it with `brief.md`, `policy.md`, your T3 provider's permissions and a short `allowedUsers` list.
-- Vulnerabilities in Slack, T3 Code, the coding providers or GitHub; report those to them.
+- Vulnerabilities in Slack (or any other chat platform), T3 Code, the coding providers or GitHub; report those to them.
 
 ## Handling tokens
 

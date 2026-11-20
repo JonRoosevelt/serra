@@ -66,7 +66,7 @@ export const NewTask = () => {
   return (
     <Page
       title="New task"
-      subtitle="Starts a T3 thread with the bot's brief and knowledge, as a Slack request would, without going through Slack."
+      subtitle="Starts a T3 thread with the bot's brief and knowledge, as a chat request would, without going through chat."
       actions={<Button icon={<ListChecks size={16} />} onClick={() => navigate('/jobs/running')}>Jobs</Button>}
     >
       <section className="flex flex-col gap-2">
@@ -89,7 +89,7 @@ export const NewTask = () => {
           )}
         />
         <p id="new-task-note" className={cx('text-xs', problem ? 'text-down' : 'text-muted')}>
-          {problem ?? 'The worker gets this as the request, with you as the requester. Its replies are in the T3 thread, not in Slack. ⌘↩ starts it.'}
+          {problem ?? 'The worker gets this as the request, with you as the requester. Its replies are in the T3 thread, not in chat. ⌘↩ starts it.'}
         </p>
         {error && <p role="alert" className="text-sm text-down">{error}</p>}
         <div className="flex flex-wrap gap-2">

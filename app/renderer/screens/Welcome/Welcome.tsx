@@ -359,7 +359,7 @@ export const Welcome = () => {
   const advance = async () => { setPicked(null); await refresh(); };
 
   return (
-    <Page title="Welcome to Serra" subtitle="Set up a bot in five steps. You can leave and come back; finished steps stay done.">
+    <Page title="Welcome to Serra" subtitle="Set up a bot that brings your coding agents to your chat, in five steps. Slack is the chat channel for now. You can leave and come back; finished steps stay done.">
       {loadError && <Alert>{loadError}</Alert>}
       {progress && shown && (
         <div className="flex flex-col gap-6 md:flex-row md:items-start">

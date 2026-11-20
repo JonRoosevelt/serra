@@ -2,7 +2,7 @@
 
 Serra is in alpha. The app is built locally as a `.dmg`. It has no Developer ID signature and isn't notarized, so macOS asks once before the first launch.
 
-The app can set up a new bot or manage one that already runs. With no profile, it opens on the first-run wizard (below). A bot can still be set up from a checkout with `pnpm run setup` and `pnpm bot activate`, as in the [README](../../README.md). The app doesn't need the checkout to stay in place.
+The app can set up a new bot or manage one that already runs. Setup connects the bot to Slack, the chat channel Serra supports today. With no profile, it opens on the first-run wizard (below). A bot can still be set up from a checkout with `pnpm run setup` and `pnpm bot activate`, as in the [README](../../README.md). The app doesn't need the checkout to stay in place.
 
 ## Build the `.dmg`
 

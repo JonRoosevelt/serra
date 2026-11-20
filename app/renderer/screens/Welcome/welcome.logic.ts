@@ -10,7 +10,7 @@ export interface StepInfo { id: SetupStepId; title: string; summary: string }
 /** The wizard's steps, in order. */
 export const STEPS: readonly StepInfo[] = [
   { id: 'profile', title: 'Create the profile', summary: 'Name the bot, say who owns it and which repository it works in.' },
-  { id: 'slackApp', title: 'Create the Slack app', summary: 'Make the Slack app from the bot’s manifest and install it to your workspace.' },
+  { id: 'slackApp', title: 'Create the Slack app', summary: 'Connect your chat channel. Slack is the one supported today: make the Slack app from the bot’s manifest and install it to your workspace.' },
   { id: 'tokens', title: 'Connect the tokens', summary: 'Store the bot and app tokens in Keychain or point at 1Password, then check them with Slack.' },
   { id: 'owner', title: 'Confirm the owner', summary: 'Check your Slack member ID with the bot’s token, so the bot knows who to ask.' },
   { id: 'service', title: 'Install the service', summary: 'Run every check, then install and start the bot under launchd.' },

@@ -2,7 +2,7 @@
   "name": "serra",
   "private": true,
   "type": "module",
-  "description": "Slack bot that turns dev requests into T3 Code worktree threads",
+  "description": "A bridge from your team chat to the coding agents on your Mac: chat requests become T3 Code worktree threads. Slack today, more channels planned.",
   "license": "MIT",
   "scripts": {
     "start": "node src/index.ts",

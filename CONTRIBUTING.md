@@ -27,7 +27,7 @@ To try a change against a real bot, use a separate Slack app and profile from th
 |---|---|
 | `src/` | The daemon and CLI (`index.ts` starts the bot, `manage.ts` is `pnpm bot`, `setup.ts`, `doctor.ts`) |
 | `app/` | The Electron app: `main/` (bridge to `src/`), `preload.ts`, `renderer/` (React) |
-| `templates/` | What a new profile is seeded with: brief, interview, starter knowledge, Slack manifest |
+| `templates/` | What a new profile is seeded with: brief, interview, starter knowledge, Slack app manifest (the only chat channel so far) |
 | `tests/` | `node --test` suites; they use temporary profiles, a fake `t3` and a simulated launchd driver |
 | `scripts/qa/` | Optional Playwright driver for the app, against a throwaway profile in `/tmp/serra-qa` |
 | `docs/` | Configuration, knowledge interview and app notes |

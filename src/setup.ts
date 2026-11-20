@@ -416,7 +416,7 @@ export const setup = async (): Promise<void> => {
   }
   directory = resolve(directory);
   createProfile(directory, profile);
-  console.log(`Profile created: ${directory}\n\n1. Create a Slack app from ${join(directory, 'manifest.json')}.\n2. Install it to your workspace. Create an app-level token with connections:write.\n3. Put the xapp and xoxb tokens in ${join(directory, '.env')}.\n4. Run pnpm run doctor --profile ${JSON.stringify(directory)}.\n5. Invite @${profile.bot.id} to a test channel.\n6. Run pnpm start --profile ${JSON.stringify(directory)}.\n\nTeach your bot how you work. ${onboardingPrompt(directory)}`);
+  console.log(`Profile created: ${directory}\n\nConnect your chat channel (Slack is the one supported today):\n1. Create a Slack app from ${join(directory, 'manifest.json')}.\n2. Install it to your workspace. Create an app-level token with connections:write.\n3. Put the xapp and xoxb tokens in ${join(directory, '.env')}.\n4. Run pnpm run doctor --profile ${JSON.stringify(directory)}.\n5. Invite @${profile.bot.id} to a test channel.\n6. Run pnpm start --profile ${JSON.stringify(directory)}.\n\nTeach your bot how you work. ${onboardingPrompt(directory)}`);
 };
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {

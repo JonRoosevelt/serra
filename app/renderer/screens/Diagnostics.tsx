@@ -123,7 +123,7 @@ export const Diagnostics = () => {
   return (
     <Page
       title="Diagnostics"
-      subtitle="Read-only health checks for the bot and the end of its log. Nothing here posts to Slack or starts work."
+      subtitle="Read-only health checks for the bot and the end of its log. Nothing here posts to chat or starts work."
       actions={(
         <>
           {checks.checkedAt && (

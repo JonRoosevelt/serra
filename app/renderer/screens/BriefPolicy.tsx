@@ -78,7 +78,7 @@ const Preview = ({ draft }: { draft: Draft }) => {
       <div className="flex flex-col gap-0.5">
         <h2 className="text-base font-semibold">Preview</h2>
         <p className="text-sm text-muted">
-          The brief a worker gets for this request from you in a new Slack thread, with today's knowledge index.
+          The brief a worker gets for this request from you in a new chat thread, with today's knowledge index.
           {dirty && ' It uses your unsaved draft.'}
         </p>
       </div>

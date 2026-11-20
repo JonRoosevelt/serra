@@ -1,5 +1,5 @@
 {
-  "display_information": { "name": "Serra", "description": "An engineering assistant that handles Slack requests through T3 Code.", "background_color": "#1c2538" },
+  "display_information": { "name": "Serra", "description": "Your local coding agents, reachable from Slack: requests run on the owner's Mac through T3 Code.", "background_color": "#1c2538" },
   "features": {
     "app_home": { "home_tab_enabled": false, "messages_tab_enabled": true, "messages_tab_read_only_enabled": false },
     "agent_view": { "agent_description": "An engineering assistant that handles requests through T3 Code." },
