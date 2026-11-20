@@ -1,0 +1,13 @@
+import { launch, shot, text } from './lib.mjs';
+const { app, page, logs } = await launch({ userData: '/tmp/serra-qa/ud-wizard' });
+await page.waitForTimeout(1200);
+await page.evaluate(() => { location.hash = '/settings/secrets'; }); await page.waitForTimeout(1500);
+console.log('SECRETS SCREEN:', (await text(page)).slice(0, 1500));
+const card = page.locator('#SLACK_APP_TOKEN-source').locator('xpath=ancestor::*[.//button[normalize-space()="Check"]][1]');
+console.log('card count', await card.count(), 'disabled?', await card.getByRole('button', { name: 'Check' }).isDisabled());
+await card.getByRole('button', { name: 'Check' }).click();
+await page.waitForTimeout(6000);
+console.log('AFTER:', (await text(page)).split('Slack app token')[1]?.slice(0, 500));
+await shot(page, 'B1-secrets-screen-checked');
+console.log(await page.evaluate(async () => JSON.stringify(await window.serra.secrets.list())));
+await app.close();

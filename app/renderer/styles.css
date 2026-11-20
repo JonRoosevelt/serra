@@ -1,0 +1,40 @@
+@import "tailwindcss";
+
+/*
+ * Colour tokens. Each is one light-dark() pair, so a theme is just `color-scheme`: the system's by default, or the
+ * one chosen in prefs (`data-theme` on <html>). Use these through Tailwind (`bg-panel`, `text-muted`, `border-line`),
+ * never raw colours, so both themes stay readable. Status colours follow assets/brand/README.md, shifted where text
+ * needs it: light up and dark down are a step deeper and lighter, so a green or red label on its 15% tint reads at
+ * 4.5:1 or better. `electron . --smoke` measures every screen's text in both themes (APP-28).
+ */
+@theme {
+  --color-canvas: light-dark(#ffffff, #1a1a1c);
+  --color-sidebar: light-dark(#f4f4f2, #151517);
+  --color-panel: light-dark(#ffffff, #202023);
+  --color-raised: light-dark(#f0f0ee, #2a2a2e);
+  --color-line: light-dark(#dcdcd8, #3a3a3f);
+  --color-ink: light-dark(#1a1a1c, #f2f1ec);
+  --color-muted: light-dark(#5f5f66, #a1a1aa);
+  --color-accent: light-dark(#4f5bd5, #8b93ff);
+  --color-accent-ink: light-dark(#ffffff, #14141a);
+  --color-up: light-dark(#166534, #22c55e);
+  --color-warn: light-dark(#b45309, #f59e0b);
+  --color-down: light-dark(#b91c1c, #f87171);
+  /* Text on a solid up, warn or down fill (the danger button, a warn badge). White on the light fills, near-black on
+     the brighter dark ones: white on dark-mode green or red is unreadable. */
+  --color-status-ink: light-dark(#ffffff, #14141a);
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+}
+
+:root { color-scheme: light dark; }
+:root[data-theme="light"] { color-scheme: light; }
+:root[data-theme="dark"] { color-scheme: dark; }
+
+html, body, #root { height: 100%; }
+body {
+  margin: 0;
+  background: var(--color-canvas);
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+}

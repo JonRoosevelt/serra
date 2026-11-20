@@ -1,0 +1,42 @@
+name: Bug report
+description: Something in Serra doesn't work as the README says.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting. **Remove tokens, Slack IDs, names, local paths and private repository details** from anything you paste. Security problems go to SECURITY.md instead.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what happened instead.
+    validations:
+      required: true
+  - type: textarea
+    id: doctor
+    attributes:
+      label: pnpm run doctor output
+      description: Output of `pnpm run doctor --profile …` (redacted).
+      render: text
+  - type: textarea
+    id: log
+    attributes:
+      label: Relevant log lines
+      description: From the profile's `logs/bot.log` (redacted).
+      render: text
+  - type: input
+    id: version
+    attributes:
+      label: Serra version or commit
+      placeholder: 0.1.0-alpha.1, or git rev-parse --short HEAD
+  - type: input
+    id: env
+    attributes:
+      label: macOS, Node and T3 Code versions
+      placeholder: macOS 15.5, Node 24.22, T3 Code 0.x
+  - type: dropdown
+    id: how
+    attributes:
+      label: How you run it
+      options: [Foreground (pnpm start), Background service (pnpm bot activate), The app]

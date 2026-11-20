@@ -1,0 +1,13 @@
+import { launch, shot, text, go } from './lib.mjs';
+import { readFileSync, existsSync } from 'node:fs';
+const K = '/tmp/serra-qa/profile/knowledge';
+const { app, page } = await launch({ profile: '/tmp/serra-qa/profile', userData: '/tmp/serra-qa/ud' });
+await page.waitForTimeout(1000); await go(page, '/knowledge/proposals'); await page.waitForTimeout(1200);
+await page.getByRole('button', { name: /Reviews/ }).click(); await page.waitForTimeout(600);
+await page.getByRole('button', { name: 'Promote' }).click(); await page.waitForTimeout(1500);
+console.log('toast:', (await page.evaluate(() => document.body.innerText.match(/Promoted[^\n]*/)))?.[0]);
+console.log('role.md now:', readFileSync(K + '/owner/role.md', 'utf8').split('\n').slice(-3), 'reviews.md exists:', existsSync(K + '/owner/reviews.md'));
+await shot(page, 'D6-promote-replaces-target');
+await page.getByRole('button', { name: 'Undo' }).first().click(); await page.waitForTimeout(1200);
+console.log('after undo role.md:', readFileSync(K + '/owner/role.md', 'utf8').split('\n').slice(-2), existsSync(K + '/proposals/2026-11-18-reviews.md'));
+await app.close();

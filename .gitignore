@@ -1,0 +1,20 @@
+node_modules/
+.env
+state.json
+state.json.tmp
+*.lock.tmp
+state.json.lock
+logs/
+.local/
+/profile.json
+profiles/
+.env.*
+!.env.example
+*.sock
+.DS_Store
+dist/
+out/
+release/
+
+# QA screenshots show local paths and account names
+docs/app/qa/screenshots/

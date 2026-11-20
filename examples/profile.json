@@ -1,0 +1,8 @@
+{
+  "version": 1,
+  "bot": { "id": "friday", "name": "Friday" },
+  "owner": { "name": "Your Name", "slackUserId": "U0123456789", "githubLogin": "your-github-login" },
+  "project": { "path": "/absolute/path/to/your/repo", "remote": "origin", "baseRef": "origin/main", "githubRepo": "your-org/your-repo" },
+  "allowedUsers": [],
+  "repositories": []
+}

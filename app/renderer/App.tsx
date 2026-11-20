@@ -1,0 +1,92 @@
+// The window's shell and router: the sidebar, a route per screen, last-screen memory and toasts.
+// Each screen lives in its own file under screens/.
+import { useEffect, useRef, type ReactElement } from 'react';
+import { HashRouter, Navigate, Route, Routes, useLocation } from 'react-router';
+import { serra } from './bridge.ts';
+import { CommandPalette } from './commands/Palette.tsx';
+import { defaultPath, routeForPath, routes, type RouteId } from './routes.ts';
+import { BriefPolicy } from './screens/BriefPolicy.tsx';
+import { Diagnostics } from './screens/Diagnostics.tsx';
+import { Jobs } from './screens/Jobs.tsx';
+import { NewTask } from './screens/NewTask.tsx';
+import { Pages } from './screens/Pages.tsx';
+import { Proposals } from './screens/Proposals.tsx';
+import { Secrets } from './screens/Secrets.tsx';
+import { Alerts } from './screens/settings/Alerts.tsx';
+import { Appearance } from './screens/settings/Appearance.tsx';
+import { BotSlack } from './screens/settings/BotSlack.tsx';
+import { People } from './screens/settings/People.tsx';
+import { Repositories } from './screens/settings/Repositories.tsx';
+import { Worker } from './screens/settings/Worker.tsx';
+import { Tools } from './screens/Tools.tsx';
+import { Updates } from './screens/Updates.tsx';
+import { Welcome } from './screens/Welcome/Welcome.tsx';
+import { WELCOME_PATH } from './screens/Welcome/welcome.logic.ts';
+import { useBadgeCounts, useBotStatus } from './shell/live.ts';
+import { FollowNavigation } from './shell/navigate.ts';
+import { Sidebar } from './shell/Sidebar.tsx';
+import { ToastProvider } from './ui/index.ts';
+
+/** The screen for each route. The type makes a route without a screen fail the type check. */
+const screens: Record<RouteId, ReactElement> = {
+  'jobs-needs-you': <Jobs group="needs you" />,
+  'jobs-running': <Jobs group="running" />,
+  'jobs-done': <Jobs group="done" />,
+  'new-task': <NewTask />,
+  proposals: <Proposals />,
+  pages: <Pages />,
+  brief: <BriefPolicy />,
+  'settings-bot': <BotSlack />,
+  'settings-people': <People />,
+  'settings-repositories': <Repositories />,
+  'settings-alerts': <Alerts />,
+  'settings-worker': <Worker />,
+  secrets: <Secrets />,
+  tools: <Tools />,
+  updates: <Updates />,
+  diagnostics: <Diagnostics />,
+  'settings-appearance': <Appearance />,
+};
+
+/** Saves the screen in prefs when the owner moves to another one, so the next launch opens there. */
+const RememberScreen = () => {
+  const { pathname } = useLocation();
+  const first = useRef(true);
+  useEffect(() => {
+    // The first screen is the one just restored (or the default); saving it again would only race other writers.
+    if (first.current) { first.current = false; return; }
+    if (!routeForPath(pathname)) return;
+    serra()?.app.setPrefs({ lastScreen: pathname }).catch(() => {});
+  }, [pathname]);
+  return null;
+};
+
+const Shell = () => {
+  const status = useBotStatus();
+  const counts = useBadgeCounts(status);
+  return (
+    <div className="flex h-full">
+      <Sidebar status={status} counts={counts} />
+      <main className="min-w-0 flex-1 overflow-y-auto" data-serra-main>
+        <Routes>
+          {routes.map((route) => <Route key={route.id} path={route.path} element={screens[route.id]} />)}
+          {/* The first-run wizard (APP-27) isn't a sidebar item: the window opens on it until a profile exists. */}
+          <Route path={WELCOME_PATH} element={<Welcome />} />
+          <Route path="*" element={<Navigate to={defaultPath} replace />} />
+        </Routes>
+      </main>
+      <RememberScreen />
+      <CommandPalette />
+      <FollowNavigation />
+    </div>
+  );
+};
+
+// A hash router: the built page loads from a file: URL, where path-based URLs don't resolve.
+export const App = () => (
+  <HashRouter>
+    <ToastProvider>
+      <Shell />
+    </ToastProvider>
+  </HashRouter>
+);

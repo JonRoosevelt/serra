@@ -1,0 +1,54 @@
+import { launch, shot, text, go } from './lib.mjs';
+import { readFileSync, writeFileSync, existsSync } from 'node:fs';
+const P = '/tmp/serra-qa/profile';
+const calls = () => readFileSync('/tmp/serra-qa/t3-calls.jsonl', 'utf8').trim().split('\n').filter(Boolean).map((l) => JSON.parse(l));
+const { app, page, logs } = await launch({ profile: P, userData: '/tmp/serra-qa/ud' });
+await app.evaluate(({ shell }) => { globalThis.__opened = []; shell.openExternal = async (u) => { globalThis.__opened.push(u); }; shell.openPath = async (p) => { globalThis.__opened.push('path:' + p); return ''; }; });
+await page.waitForTimeout(1000);
+await go(page, '/jobs/new'); await page.waitForTimeout(800);
+console.log('start disabled when empty:', await page.getByRole('button', { name: 'Start task' }).isDisabled());
+const box = page.locator('[data-serra-main] textarea').first();
+await box.fill('QA: add a /health endpoint that returns 200');
+await page.getByRole('button', { name: 'Show the brief' }).click(); await page.waitForTimeout(1000);
+console.log('BRIEF PREVIEW contains request:', (await text(page)).includes('add a /health endpoint'));
+await shot(page, 'I1-new-task-brief');
+await box.press('Meta+Enter'); await page.waitForTimeout(3000);
+console.log('AFTER START hash:', page.url().replace(/.*#/, '#'), (await text(page)).match(/[^\n]*(Started|started|T3)[^\n]*/g)?.slice(0, 4));
+const start = calls().find((c) => c.args[1] === 'start');
+console.log('T3 START args:', start?.args.slice(0, 9), 'brief has request:', start?.input.includes('add a /health endpoint'), 'stdin len', start?.input.length);
+console.log('tasks.json:', readFileSync(P + '/tasks.json', 'utf8').slice(0, 400));
+await go(page, '/jobs/running'); await page.waitForTimeout(1500);
+console.log('JOBS shows task:', (await text(page)).match(/[^\n]*(app|health)[^\n]*/g));
+await shot(page, 'I2-jobs-with-task');
+// interview
+await go(page, '/knowledge/proposals'); await page.waitForTimeout(1000);
+await page.getByRole('button', { name: 'Start interview' }).click(); await page.waitForTimeout(1000);
+console.log('INTERVIEW DIALOG:', (await page.evaluate(() => document.querySelector('dialog[open]')?.innerText))?.slice(0, 500));
+await shot(page, 'I3-interview-dialog');
+const go2 = page.locator('dialog[open]').getByRole('button', { name: /Start/ });
+await go2.last().click(); await page.waitForTimeout(3000);
+const iv = calls().filter((c) => c.args[1] === 'start').at(-1);
+console.log('INTERVIEW T3 title:', iv?.args[iv.args.indexOf('--title') + 1], 'brief starts:', iv?.input.slice(0, 160).replace(/\n/g, ' '));
+// a proposal appearing without restart
+writeFileSync(P + '/knowledge/proposals/2026-11-19-live.md', '---\ntype: preference\ndescription: Written while the app was open\nwritten: 2026-11-19\nverified: no\nsources:\n  - Owner interview, 2026-11-19\n---\n\nLive proposal.\n');
+await page.waitForTimeout(2500);
+console.log('LIVE PROPOSAL visible:', (await text(page)).includes('Live'));
+await shot(page, 'I4-live-proposal');
+// palette actions
+const palette = async (q) => { await page.keyboard.press('Meta+k'); await page.waitForTimeout(300); await page.keyboard.type(q); await page.waitForTimeout(300); const opts = await page.evaluate(() => [...document.querySelectorAll('dialog[data-command-palette] [role=option]')].map((o) => o.textContent).slice(0, 5)); await page.keyboard.press('Enter'); await page.waitForTimeout(1200); return opts; };
+console.log('PALETTE profile folder:', await palette('open profile folder'), await app.evaluate(() => globalThis.__opened));
+console.log('PALETTE add user:', await palette('add allowed'), await page.evaluate(() => document.querySelector('dialog[open]')?.innerText?.slice(0, 300)));
+await shot(page, 'I5-palette-add-user');
+await page.keyboard.type('U0BBBBBBBBB'); await page.keyboard.press('Enter'); await page.waitForTimeout(1000);
+console.log('allowedUsers:', JSON.parse(readFileSync(P + '/profile.json', 'utf8')).allowedUsers);
+await page.keyboard.press('Escape');
+console.log('PALETTE restart:', await palette('restart bot'), (await page.evaluate(() => document.body.innerText.match(/[^\n]*(isn't installed|Restart)[^\n]*/g)))?.slice(-2));
+await page.keyboard.press('Escape');
+console.log('PALETTE promote:', await palette('promote'), await page.evaluate(() => document.querySelector('dialog[open]')?.innerText?.slice(0, 200)));
+// Promote proposal… asks for a proposal first: Escape leaves that step, a second Escape closes the palette.
+await page.keyboard.press('Escape'); await page.waitForTimeout(200);
+if (await page.locator('dialog[data-command-palette][open]').count()) await page.keyboard.press('Escape');
+await page.waitForTimeout(300);
+console.log('PALETTE cleanup:', await palette('clean up'), page.url().replace(/.*#/, '#'));
+await app.close();
+console.log(logs.filter((l) => /pageerror|console.error/.test(l)).join('\n').slice(0, 1500));

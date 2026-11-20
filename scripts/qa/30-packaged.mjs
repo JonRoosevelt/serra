@@ -1,0 +1,12 @@
+import { launch, shot, text, header, go, fakeDaemon } from './lib.mjs';
+const P = '/tmp/serra-qa/profile';
+const d = await fakeDaemon(P);
+d.send({ status: { counts: { needsYou: 1, running: 1 } } });
+const { app, page, logs } = await launch({ profile: P, userData: '/tmp/serra-qa/ud-pkg' });
+await page.waitForTimeout(2500);
+console.log('PKG header:', await header(page), 'isPackaged:', await app.evaluate(({ app }) => [app.isPackaged, app.getVersion()]));
+await go(page, '/settings/diagnostics'); await page.waitForTimeout(7000);
+console.log((await text(page)).match(/[^\n]*(checks fail|Serra app|Node\n.*)[^\n]*/g));
+await shot(page, 'K1-packaged-diagnostics');
+await go(page, '/jobs/needs-you'); await page.waitForTimeout(1500); await shot(page, 'K2-packaged-jobs');
+await app.close(); await d.quit();

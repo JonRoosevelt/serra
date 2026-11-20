@@ -1,0 +1,53 @@
+# Packages the Electron app as an unsigned macOS .app and .dmg (APP-17). Run with `pnpm app:package`.
+# See docs/app/install.md for installing it and docs/app/electron-build.md for the bundle it ships.
+appId: dev.serra.app
+productName: Serra
+# package.json has no version of its own (the daemon doesn't need one); the app reports this one.
+extraMetadata:
+  version: 0.1.0
+directories:
+  output: release
+  buildResources: assets/brand
+
+# Plain folder instead of an asar archive: `codeRoot` (src/config.ts) resolves to the app folder, and setup copies
+# templates/ with `cpSync`, which asar doesn't support. The folder is small and nothing here is secret.
+asar: false
+# Only the bundle and the files the bundle reads at run time. `codeRoot` is the folder holding package.json, so
+# templates/ and examples/ sit at the same relative paths as in the checkout, and the menubar loads its icons from
+# assets/brand next to app/ (app/main/index.ts). Production dependencies (@slack/bolt, electron-store) are added
+# from node_modules by electron-builder; dev dependencies (React, Vite, ...) are bundled or build-only.
+files:
+  - package.json
+  - app/out/**
+  - "!app/out/**/*.map"
+  - "!app/out/release-source/**"
+  - templates/**
+  - examples/**
+  - assets/brand/serra-status-*.png
+# Updates › Prepare (src/deploy.ts) copies a release from a pristine copy of the daemon's code: the app folder
+# above only has the bundle, and its package.json loses devDependencies, so `pnpm install --frozen-lockfile` would
+# refuse it. `pnpm app:build` stages that copy in app/out/release-source (app/build.ts); it goes, as it is, to
+# Contents/Resources/release-source, beside the app folder (`PACKAGED_SOURCE`). Taking it from the checkout root
+# instead would make electron-builder leave package.json and templates/ out of the app folder.
+extraResources:
+  - from: app/out/release-source
+    to: release-source
+# No native modules, so nothing to rebuild against Electron.
+npmRebuild: false
+publish: null
+
+mac:
+  target:
+    - dmg
+  icon: assets/brand/serra-icon.png
+  category: public.app-category.developer-tools
+  # Not signed with a Developer ID (alpha): users open it past Gatekeeper once
+  # (docs/app/install.md). "-" is an ad-hoc signature,
+  # which needs no certificate; without it Apple silicon reports a downloaded copy as "damaged" instead of
+  # offering Open Anyway.
+  identity: "-"
+  hardenedRuntime: false
+  gatekeeperAssess: false
+dmg:
+  sign: false
+  writeUpdateInfo: false

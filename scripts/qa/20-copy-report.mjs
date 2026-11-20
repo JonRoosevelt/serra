@@ -1,0 +1,11 @@
+import { launch, go } from './lib.mjs';
+const { app, page, logs } = await launch({ profile: '/tmp/serra-qa/profile', userData: '/tmp/serra-qa/ud' });
+await page.waitForTimeout(1000);
+await go(page, '/settings/diagnostics'); await page.waitForTimeout(6000);
+await app.evaluate(({ clipboard }) => clipboard.writeText('SENTINEL'));
+await page.bringToFront();
+await page.getByRole('button', { name: 'Copy report' }).click(); await page.waitForTimeout(800);
+console.log('clip:', JSON.stringify((await app.evaluate(({ clipboard }) => clipboard.readText())).slice(0, 200)));
+console.log('toasts:', await page.evaluate(() => document.body.innerText.match(/[^\n]*(cop|Cop)[^\n]*/g)));
+console.log('direct:', await page.evaluate(() => navigator.clipboard.writeText('x').then(() => 'ok', (e) => e.name + ': ' + e.message)));
+await app.close();

@@ -1,0 +1,48 @@
+import { launch, shot, text, go } from './lib.mjs';
+import { readFileSync } from 'node:fs';
+const P = '/tmp/serra-qa/profile', K = P + '/knowledge';
+const { app, page, logs } = await launch({ profile: P, userData: '/tmp/serra-qa/ud' });
+await page.waitForTimeout(1000);
+const status = () => page.evaluate(() => document.querySelector('[data-serra-main]').innerText.match(/(Saved[^\n]*|[^\n]*(cap|lines|unsaved|Fix|problem|must)[^\n]*)/gi)?.slice(0, 6));
+// E: pages
+await go(page, '/knowledge/pages'); await page.waitForTimeout(1200);
+await page.getByRole('button', { name: /draft\.md/ }).click(); await page.waitForTimeout(500);
+const ed = page.locator('[data-serra-main] textarea');
+await ed.fill(readFileSync(K + '/ops/draft.md', 'utf8') + Array.from({ length: 120 }, (_, i) => `line ${i}`).join('\n'));
+await page.waitForTimeout(400);
+console.log('OVER CAP:', await status(), 'save disabled:', await page.getByRole('button', { name: 'Save' }).isDisabled());
+await shot(page, 'E1-page-over-cap');
+await ed.fill('no header at all\n'); await page.waitForTimeout(300);
+console.log('NO HEADER:', await status(), 'save disabled:', await page.getByRole('button', { name: 'Save' }).isDisabled());
+await page.getByRole('button', { name: 'Revert' }).click(); await page.waitForTimeout(300);
+await ed.fill(readFileSync(K + '/ops/draft.md', 'utf8').replace('Draft text.', 'Draft text, edited in QA.')); 
+await page.getByRole('button', { name: 'Save' }).click(); await page.waitForTimeout(800);
+console.log('SAVED FILE has edit:', readFileSync(K + '/ops/draft.md', 'utf8').includes('edited in QA'), await status());
+await page.getByRole('button', { name: 'Mark verified today' }).click(); await page.waitForTimeout(400);
+await page.getByRole('button', { name: 'Save' }).click(); await page.waitForTimeout(800);
+console.log('VERIFIED:', readFileSync(K + '/ops/draft.md', 'utf8').match(/verified: .*/)[0], (await text(page)).split('\n').slice(0, 3).join(' | '));
+await shot(page, 'E2-page-saved-verified');
+// F: brief
+await go(page, '/brief'); await page.waitForTimeout(1200);
+const brief = page.locator('[data-serra-main] textarea').first();
+const orig = await brief.inputValue();
+await brief.fill(orig + '\n{{NOT_A_PLACEHOLDER}}\n'); await page.waitForTimeout(500);
+console.log('BAD PLACEHOLDER:', await page.evaluate(() => document.querySelector('[data-serra-main]').innerText.match(/[^\n]*(placeholder|Unknown|unknown)[^\n]*/g)), 'save disabled', await page.getByRole('button', { name: 'Save' }).isDisabled());
+await shot(page, 'F1-brief-bad-placeholder');
+await brief.fill(orig.replace('{{REQUEST}}', '')); await page.waitForTimeout(500);
+console.log('MISSING REQUIRED:', await page.evaluate(() => document.querySelector('[data-serra-main]').innerText.match(/[^\n]*(REQUEST|required|missing)[^\n]*/g)?.slice(0, 4)), 'save disabled', await page.getByRole('button', { name: 'Save' }).isDisabled());
+await brief.fill(orig + '\nQA edit line.\n');
+await page.getByRole('button', { name: 'Save' }).click(); await page.waitForTimeout(800);
+console.log('BRIEF SAVED:', readFileSync(P + '/brief.md', 'utf8').includes('QA edit line.'));
+await page.getByLabel('Sample request').fill('Add a health endpoint'); await page.getByRole('button', { name: 'Preview', exact: true }).click(); await page.waitForTimeout(1200);
+const prev = await page.evaluate(() => document.querySelector('[data-serra-main] pre')?.textContent ?? '');
+console.log('PREVIEW has request & no placeholders:', prev.includes('Add a health endpoint'), !/\{\{[A-Z_]+\}\}/.test(prev), prev.length);
+await shot(page, 'F2-brief-preview');
+await page.getByRole('button', { name: /Qa proposal/ }).click(); await page.waitForTimeout(800);
+console.log('PROPOSED VIEW:', (await text(page)).match(/[^\n]*(Apply|proposed|Prefer small)[^\n]*/g)?.slice(0, 6));
+await shot(page, 'F3-brief-proposed');
+const apply = page.getByRole('button', { name: /Apply/ });
+if (await apply.count()) { await apply.first().click(); await page.waitForTimeout(600); const c = page.locator('dialog[open]').getByRole('button', { name: /Apply/ }); if (await c.count()) await c.click(); await page.waitForTimeout(1000); }
+console.log('POLICY APPLIED:', readFileSync(P + '/policy.md', 'utf8').includes('proposed in QA'));
+await app.close();
+console.log(logs.filter((l) => /pageerror|console.error/.test(l)).join('\n'));

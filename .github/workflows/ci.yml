@@ -1,0 +1,32 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      # Release status counts commits on a local main branch; a pull request checkout has none.
+      - run: git show-ref --verify --quiet refs/heads/main || git branch main origin/main
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      # Put the pnpm shim in its own folder, not next to Node: tests check how prepare finds Corepack there.
+      - run: |
+          mkdir -p "$RUNNER_TEMP/pnpm-bin"
+          corepack enable --install-directory "$RUNNER_TEMP/pnpm-bin" pnpm
+          echo "$RUNNER_TEMP/pnpm-bin" >> "$GITHUB_PATH"
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm check
+      - run: pnpm test
+      - run: pnpm knowledge
+      - run: ./scripts/install.sh --help

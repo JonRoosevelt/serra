@@ -1,0 +1,42 @@
+import { launch, shot, text, header, go, fakeDaemon, hookMain, mainQa } from './lib.mjs';
+const P = '/tmp/serra-qa/profile';
+const { app, page, logs } = await launch({ profile: P, userData: '/tmp/serra-qa/ud' });
+await hookMain(app);
+await page.waitForTimeout(1500);
+console.log('H1 stopped header:', await header(page));
+const d = await fakeDaemon(P);
+await page.waitForTimeout(2500);
+console.log('H2 up header:', await header(page));
+await shot(page, 'H2-header-up');
+d.send({ status: { counts: { needsYou: 1, running: 2 } } }); await page.waitForTimeout(1500);
+console.log('H3 sidebar:', await page.evaluate(() => document.querySelector('[data-serra-sidebar]').innerText.split('\n').slice(0, 9).join(' | ')));
+d.send({ event: ['needs_owner', { key: 'C0123456789:1700000000.000100' }] }); await page.waitForTimeout(1500);
+d.send({ event: ['failure', { key: 'C0123456789:1700000000.000400', error: 'QA failure event' }] }); await page.waitForTimeout(1500);
+d.send({ event: ['needs_owner', { key: 'C0123456789:1700000000.000100' }] }); await page.waitForTimeout(1500);
+d.send({ status: { slackConnected: false } }); await page.waitForTimeout(1500);
+console.log('H4 slack disconnected header:', await header(page));
+await shot(page, 'H4-slack-disconnected');
+let q = await mainQa(app);
+console.log('TRAY MENUS (last 3):', JSON.stringify(q.menus.slice(-3)));
+console.log('TOOLTIPS:', [...new Set(q.tooltips)]);
+console.log('NOTES so far:', q.notes);
+await d.quit(); await page.waitForTimeout(2500);
+console.log('H5 after daemon exit:', await header(page));
+q = await mainQa(app);
+console.log('NOTES after stop:', q.notes);
+console.log('TRAY last:', JSON.stringify(q.menus.at(-1)));
+// click notification -> navigates
+const nav = await app.evaluate(() => { const n = globalThis.__qa.lastNote; n?.emit('click'); return Boolean(n); });
+await page.waitForTimeout(1500);
+console.log('after notification click hash:', page.url().replace(/.*#/, '#'));
+// restart from tray: no service installed
+const restart = await app.evaluate(async () => { const m = globalThis.__qa.lastMenu; const item = m.items.find((i) => /Restart|Start/.test(i.label)); item?.click(); return item?.label; });
+await page.waitForTimeout(2000);
+q = await mainQa(app);
+console.log('tray restart item:', restart, 'menus after:', JSON.stringify(q.menus.slice(-2)), 'notes:', q.notes.slice(-2));
+// bot.restart via bridge
+console.log('bridge restart:', await page.evaluate(() => window.serra.bot.restart().then(() => 'ok', (e) => e.message)));
+console.log('bridge start:', await page.evaluate(() => window.serra.bot.start().then(() => 'ok', (e) => e.message)));
+console.log('bridge stop:', await page.evaluate(() => window.serra.bot.stop().then(() => 'ok', (e) => e.message)));
+await app.close();
+console.log(logs.filter((l) => /pageerror|console.error|\[serra\]/.test(l)).join('\n').slice(0, 2000));

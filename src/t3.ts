@@ -1,0 +1,133 @@
+import { spawn } from 'node:child_process';
+import { homedir } from 'node:os';
+import { branchName } from './branch.ts';
+import type { Config } from './config.ts';
+import type { StartThreadInput, T3Message, T3Thread, T3ThreadDetail } from './types.ts';
+
+const T3_BIN = process.env.T3_BIN ?? `${homedir()}/.t3/bin/t3`;
+
+interface RunOptions {
+  input?: string;
+  timeoutMs?: number;
+}
+
+/** Runs a command, piping `input` to stdin. Rejects with stderr on a non-zero exit. */
+export const run = (cmd: string, args: string[], { input, timeoutMs = 60_000 }: RunOptions = {}): Promise<string> =>
+  new Promise((resolve, reject) => {
+    const child = spawn(cmd, args, { stdio: ['pipe', 'pipe', 'pipe'] });
+    let stdout = '';
+    let stderr = '';
+    const timer = setTimeout(() => { child.kill('SIGKILL'); reject(new Error(`${cmd} timed out after ${timeoutMs}ms`)); }, timeoutMs);
+    child.once('close', () => clearTimeout(timer));
+    child.once('error', () => clearTimeout(timer));
+    child.stdin.on('error', reject);
+    child.stdout.on('data', (chunk: Buffer) => {
+      stdout += chunk.toString();
+    });
+    child.stderr.on('data', (chunk: Buffer) => {
+      stderr += chunk.toString();
+    });
+    child.on('error', reject);
+    child.on('close', (code) => {
+      if (code === 0) return resolve(stdout);
+      reject(new Error(`${cmd} ${args.slice(0, 2).join(' ')} exited ${code}: ${stderr.trim()}`));
+    });
+    child.stdin.end(input);
+  });
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === 'object' && value !== null && !Array.isArray(value);
+
+const isStringOrNull = (value: unknown): value is string | null => value === null || typeof value === 'string';
+
+const isThread = (value: unknown): value is T3Thread =>
+  isRecord(value) &&
+  typeof value.threadId === 'string' &&
+  typeof value.link === 'string' &&
+  typeof value.status === 'string' &&
+  isStringOrNull(value.latestRunId) &&
+  isStringOrNull(value.activeRunId);
+
+const isMessage = (value: unknown): value is T3Message =>
+  isRecord(value) &&
+  typeof value.role === 'string' &&
+  (value.runId === undefined || typeof value.runId === 'string') &&
+  (value.text === undefined || typeof value.text === 'string');
+
+const isThreadDetail = (value: unknown): value is T3ThreadDetail =>
+  isRecord(value) && isThread(value.thread) && Array.isArray(value.messages) && value.messages.every(isMessage);
+
+const parseJson = (raw: string, what: string): unknown => {
+  const start = raw.indexOf('{');
+  if (start === -1) throw new Error(`No JSON in t3 ${what} output: ${raw.slice(0, 200)}`);
+  return JSON.parse(raw.slice(start));
+};
+
+/**
+ * The thread a job starts, for a brief already filled: a branch from the profile's `branchPattern`, the title
+ * `<bot name>: <summary>` and the profile's worker. The daemon (a Slack request) and the app (a task, src/tasks.ts)
+ * both start their threads from this, so a job looks the same in T3 whichever way it began.
+ */
+export const jobThreadInput = (
+  config: Pick<Config, 'id' | 'name' | 'project' | 'baseRef' | 'branchPattern' | 'workerProvider' | 'workerModel'>,
+  { summary, brief, now }: { summary: string; brief: string; now: Date },
+): StartThreadInput => ({
+  project: config.project,
+  baseRef: config.baseRef,
+  branch: branchName(config.branchPattern, { id: config.id, request: summary, now }),
+  title: `${config.name}: ${summary.replace(/\s+/g, ' ').slice(0, 60)}`,
+  brief,
+  ...(config.workerProvider ? { provider: config.workerProvider } : {}),
+  ...(config.workerModel ? { model: config.workerModel } : {}),
+});
+
+/** Starts a thread in a new worktree with the brief on stdin, and returns its id. */
+export const startThread = async ({ project, baseRef, branch, title, brief, provider, model }: StartThreadInput, bin = T3_BIN): Promise<string> => {
+  const worker = [...(provider ? ['--provider', provider] : []), ...(model ? ['--model', model] : [])];
+  const raw = await run(
+    bin,
+    ['thread', 'start', '--worktree', baseRef, '--branch', branch, '--title', title, ...worker, '--json', project, '-'],
+    { input: brief },
+  );
+  const out = parseJson(raw, 'thread start');
+  if (!isRecord(out) || typeof out.threadId !== 'string') {
+    throw new Error(`t3 thread start returned no thread id: ${raw.slice(0, 300)}`);
+  }
+  return out.threadId;
+};
+
+/** Queues a message on a thread. A busy thread gets it as its next turn. */
+export const sendToThread = async (threadId: string, message: string, bin = T3_BIN): Promise<void> => {
+  await run(bin, ['thread', 'send', '--json', threadId, '-'], { input: message });
+};
+
+/** Reads a thread's state and its latest `messages` messages, oldest first. Throws if T3's JSON no longer has the fields the bot needs. */
+export const showThread = async (threadId: string, bin = T3_BIN, messages = 1): Promise<T3ThreadDetail> => {
+  const raw = await run(bin, ['thread', 'show', '--messages', String(messages), '--json', threadId]);
+  const detail = parseJson(raw, 'thread show');
+  if (!isThreadDetail(detail)) {
+    throw new Error(`Unexpected t3 thread show output for ${threadId}: ${raw.slice(0, 300)}`);
+  }
+  return detail;
+};
+
+/** A GitHub pull request URL, `https://github.com/<owner>/<repo>/pull/<n>`, and nothing after it. */
+export const GITHUB_PR_URL = /^https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/pull\/\d+$/;
+
+/**
+ * The PR a T3 thread is about, from `t3 thread show --json`: the one linked to the thread, else the newest open one
+ * it opened or found, else the newest of any state. Only github.com PR links count. A draft PR the bot never asked
+ * a review for (so `reviewRequestedPrs` is empty) is found here.
+ */
+export const threadPullRequest = (thread: Record<string, unknown>): string | undefined => {
+  const record = (value: unknown): Record<string, unknown> =>
+    typeof value === 'object' && value !== null && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
+  const prs = (Array.isArray(thread.pullRequests) ? thread.pullRequests : [])
+    .map(record)
+    .filter((pr) => typeof pr.url === 'string' && GITHUB_PR_URL.test(pr.url));
+  const linked = thread.linkedPullRequest;
+  const linkedUrl = typeof linked === 'string' ? linked : record(linked).url;
+  if (typeof linkedUrl === 'string' && GITHUB_PR_URL.test(linkedUrl)) return linkedUrl;
+  // T3 lists them oldest first.
+  return (prs.filter((pr) => pr.state === 'open').at(-1) ?? prs.at(-1))?.url as string | undefined;
+};

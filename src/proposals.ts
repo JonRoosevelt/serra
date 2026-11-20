@@ -1,0 +1,365 @@
+import { randomBytes } from 'node:crypto';
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync } from 'node:fs';
+import { basename, dirname, join, relative, resolve, sep } from 'node:path';
+import { writeFileAtomic } from './config.ts';
+import type { Proposal, ProposalDiff } from './contracts.ts';
+import { insideKnowledge, knowledgePagePath } from './knowledge.ts';
+import { DATE, frontmatter, INDEX_MAX_LINES, lineCount, NOT_PAGES, pageProblems, PROPOSALS_DIR, removeHeaderField, setHeaderField } from './knowledge-rules.ts';
+
+/**
+ * The owner's review queue for `knowledge/proposals/`: list, read, promote, merge, discard and undo.
+ *
+ * Every change first writes a backup (the before and after text of each file it touches) under the profile's
+ * `backups/knowledge/`, outside `knowledge/` so `pnpm knowledge` never mistakes a backup for a page. The backup's ID
+ * is what `undoProposalChange` takes, so the app's undo toast and the CLI's `undo` share one path.
+ *
+ * Promotion is an owner action: the app and `pnpm bot proposals` call it, Slack never does.
+ */
+
+/** Files in `proposals/` that aren't proposals: the folder's README and the onboarding interview's progress notes. */
+const NOT_PROPOSALS = new Set(['README.md', 'onboarding-progress.md']);
+/** Leading `YYYY-MM-DD-` of a proposal's file name. */
+const DATED_NAME = /^(\d{4}-\d{2}-\d{2})-(.+)$/;
+
+export type ProposalAction = 'promote' | 'merge' | 'discard';
+
+/** One file a change touched. `null` means the file did not exist (before) or was removed (after). */
+export interface FileChange {
+  /** Relative to `knowledge/`. */
+  path: string;
+  before: string | null;
+  after: string | null;
+}
+
+/** What a promote, merge or discard did, and everything `undoProposalChange` needs to reverse it. */
+export interface ProposalChange {
+  /** Backup ID, the folder name under `backups/knowledge/`. */
+  id: string;
+  action: ProposalAction;
+  at: string;
+  /** The proposal's ID, relative to `knowledge/proposals/`. */
+  proposal: string;
+  /** The page the proposal became (promote) or went into (merge), relative to `knowledge/`. Null for discard. */
+  page: string | null;
+  files: FileChange[];
+  /** Set once the change has been undone; a change is undone at most once. */
+  undoneAt?: string;
+}
+
+export interface PromoteOptions {
+  /** Folder under `knowledge/` the page moves into, like `owner` or `product/billing`. */
+  folder: string;
+  /** File name in that folder. Defaults to the proposal's name without its date, like `deploys.md`. */
+  name?: string;
+  /** Index column "When the request". Defaults to the page's description. */
+  when?: string;
+  /** Index column "What it gives you". Defaults to the page's description. */
+  gives?: string;
+}
+
+export interface MergeOptions {
+  /** Existing page under `knowledge/` the proposal goes into, like `owner/role.md`. */
+  into: string;
+  /**
+   * The merged page as the owner edited it. Without it, the proposal's body is appended to the page, its sources
+   * are added to the page's `sources`, and `verified` is set to today.
+   */
+  text?: string;
+}
+
+/** Where a proposal can go: folders to promote into and pages to merge into, both relative to `knowledge/`. */
+export interface ProposalTargets {
+  /** Every folder under `knowledge/` except `proposals/`, sorted. */
+  folders: string[];
+  /** Every page (a `.md` that isn't an index, log, README or proposal), sorted. */
+  pages: string[];
+}
+
+export interface ProposalsOptions {
+  /** The profile's `knowledge/` folder. */
+  knowledgeDir: string;
+  /** Where backups go. Defaults to `backups/knowledge/` next to `knowledge/`, in the profile. */
+  backupDir?: string;
+  /** Clock, for tests. */
+  now?: () => Date;
+}
+
+const today = (date: Date): string => date.toISOString().slice(0, 10);
+
+/** A table cell: one line, with `|` escaped so it can't add a column. */
+const cell = (text: string): string => text.replace(/\s+/g, ' ').trim().replace(/\|/g, '\\|');
+
+/** The page without its `---` header. */
+const body = (text: string): string => text.replace(/^---\n[\s\S]*?\n---\n/, '');
+
+/** The `- item` lines under a header's `sources:` key. */
+const sourceItems = (text: string): string[] => {
+  const header = /^---\n([\s\S]*?)\n---\n/.exec(text)?.[1] ?? '';
+  const lines = header.split('\n');
+  const start = lines.findIndex((line) => line.startsWith('sources:'));
+  if (start === -1) return [];
+  const inline = lines[start]!.slice('sources:'.length).trim();
+  const items = inline ? [inline.replace(/^-\s*/, '')] : [];
+  for (const line of lines.slice(start + 1)) {
+    const item = /^\s+-\s*(.*)$/.exec(line);
+    if (!item) break;
+    items.push(item[1] ?? '');
+  }
+  return items.filter(Boolean);
+};
+
+/** Add `items` to the header's `sources` list, skipping ones already there. */
+const addSources = (text: string, items: string[]): string => {
+  const existing = sourceItems(text);
+  const added = items.filter((item) => !existing.includes(item));
+  const match = /^---\n([\s\S]*?)\n---\n/.exec(text);
+  if (added.length === 0 || !match?.[1]) return text;
+  const lines = match[1].split('\n');
+  const start = lines.findIndex((line) => line.startsWith('sources:'));
+  const all = [...existing, ...added].map((item) => `  - ${item}`);
+  if (start === -1) {
+    lines.push('sources:', ...all);
+  } else {
+    let end = start + 1;
+    while (end < lines.length && /^\s+-/.test(lines[end]!)) end += 1;
+    lines.splice(start, end - start, 'sources:', ...all);
+  }
+  return `---\n${lines.join('\n')}\n---\n${text.slice(match[0].length)}`;
+};
+
+export const createProposals = ({ knowledgeDir, backupDir, now = () => new Date() }: ProposalsOptions) => {
+  const root = resolve(knowledgeDir);
+  const proposalsRoot = join(root, PROPOSALS_DIR);
+  const backups = resolve(backupDir ?? join(dirname(root), 'backups', 'knowledge'));
+
+  const inside = (relativePath: string, what: string): string => insideKnowledge(root, relativePath, what);
+
+  const toKnowledgePath = (absolute: string): string => relative(root, absolute).split(sep).join('/');
+
+  const readText = (relativePath: string): string | null => {
+    const absolute = inside(relativePath, 'File');
+    return existsSync(absolute) ? readFileSync(absolute, 'utf8') : null;
+  };
+
+  /** Check a proposal ID and return its path relative to `knowledge/`. */
+  const proposalPath = (id: string): string => {
+    if (!id.endsWith('.md')) throw new Error(`A proposal is a .md file under knowledge/proposals/. Got: ${id}`);
+    if (NOT_PROPOSALS.has(basename(id))) throw new Error(`${id} is not a proposal.`);
+    const path = toKnowledgePath(inside(`${PROPOSALS_DIR}/${id}`, 'Proposal'));
+    if (!path.startsWith(`${PROPOSALS_DIR}/`)) throw new Error(`Proposal is outside knowledge/proposals/: ${id}`);
+    if (!existsSync(join(root, path))) throw new Error(`No proposal ${id} in knowledge/proposals/.`);
+    return path;
+  };
+
+  const pagePath = (relativePath: string, what: string): string => knowledgePagePath(root, relativePath, what);
+
+  const describe = (id: string): Proposal => {
+    const text = readFileSync(join(proposalsRoot, id), 'utf8');
+    const fields = frontmatter(text);
+    const date = DATED_NAME.exec(basename(id))?.[1] ?? null;
+    let target: string | null = null;
+    let folder: string | undefined;
+    const named = fields?.get('target')?.trim();
+    if (named) {
+      try {
+        const path = pagePath(named, 'Target');
+        if (existsSync(join(root, path))) target = path;
+        else if (dirname(path) !== '.') folder = dirname(path);
+      } catch { /* A target outside knowledge/ is ignored; the owner picks one when merging. */ }
+    }
+    const description = fields?.get('description')?.trim();
+    return {
+      path: id, date: date && DATE.test(date) ? date : null, ...(description ? { description } : {}), target, ...(folder ? { folder } : {}),
+    };
+  };
+
+  const proposalIds = (relativeDir = ''): string[] => {
+    const dir = join(proposalsRoot, relativeDir);
+    if (!existsSync(dir)) return [];
+    return readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
+      const id = relativeDir ? `${relativeDir}/${entry.name}` : entry.name;
+      if (entry.isDirectory()) return proposalIds(id);
+      return entry.name.endsWith('.md') && !NOT_PROPOSALS.has(entry.name) ? [id] : [];
+    });
+  };
+
+  /** Every proposal waiting for the owner, newest date first, undated ones last. */
+  const listProposals = (): Proposal[] =>
+    proposalIds().map(describe).sort((a, b) =>
+      (b.date ?? '').localeCompare(a.date ?? '') || a.path.localeCompare(b.path));
+
+  /** The proposal's text next to the page it would change (its `target`), or null when it is a new page. */
+  const readProposal = (id: string): ProposalDiff => {
+    const path = proposalPath(id);
+    const proposal = describe(id);
+    return {
+      proposal,
+      current: proposal.target ? readText(proposal.target) : null,
+      proposed: readFileSync(join(root, path), 'utf8'),
+    };
+  };
+
+  /**
+   * Write the backup, then apply each file change. The backup goes first so an interrupted change can still be
+   * inspected; each file is written atomically.
+   */
+  const apply = (action: ProposalAction, proposal: string, page: string | null, files: FileChange[]): ProposalChange => {
+    const at = now();
+    const slug = basename(proposal, '.md').replace(/[^\w-]+/g, '-');
+    const id = `${at.toISOString().replace(/[-:]/g, '').replace(/\.\d+Z$/, 'Z')}-${action}-${slug}-${randomBytes(3).toString('hex')}`;
+    const change: ProposalChange = { id, action, at: at.toISOString(), proposal, page, files };
+    mkdirSync(join(backups, id), { recursive: true, mode: 0o700 });
+    writeFileAtomic(join(backups, id, 'change.json'), JSON.stringify(change, null, 2) + '\n');
+    writeFiles(files.map(({ path, after }) => ({ path, text: after })));
+    return change;
+  };
+
+  const writeFiles = (files: { path: string; text: string | null }[]): void => {
+    for (const { path, text } of files) {
+      const absolute = inside(path, 'File');
+      if (text === null) {
+        rmSync(absolute, { force: true });
+      } else {
+        mkdirSync(dirname(absolute), { recursive: true });
+        writeFileAtomic(absolute, text, { mode: 0o644 });
+      }
+    }
+  };
+
+  const logLine = (date: string, line: string): FileChange => {
+    const before = readText('log.md');
+    const base = (before ?? '# Knowledge changes\n').trimEnd();
+    return { path: 'log.md', before, after: `${base}\n- ${date}: ${line}\n` };
+  };
+
+  /**
+   * Move a proposal into `folder` as a confirmed page: set `verified` to today, add its row to `index.md` and a line
+   * to `log.md`, and remove it from `proposals/`. A proposal whose `target:` names an existing page in `folder` is
+   * the whole page as it should now read (templates/interview.md), so it replaces that page and keeps its index row.
+   * Refuses a destination outside `knowledge/`, any other existing page (merge into it instead), a page that would
+   * fail `pnpm knowledge`, and an index that would go over its cap. The `target:` line is dropped from the page.
+   */
+  const promoteProposal = (id: string, { folder, name, when, gives }: PromoteOptions): ProposalChange => {
+    const source = proposalPath(id);
+    const cleanFolder = folder.trim().replace(/\/+$/, '');
+    if (!cleanFolder) throw new Error('Pick a folder under knowledge/ to promote into, like owner.');
+    const { target } = describe(id);
+    const replacing = target !== null && dirname(target) === cleanFolder && (name === undefined || name === basename(target));
+    const fileName = replacing ? basename(target) : name ?? (DATED_NAME.exec(basename(id))?.[2] ?? basename(id));
+    if (fileName.includes('/') || fileName.includes('\\')) throw new Error(`The page name is a file name, not a path: ${fileName}`);
+    const destination = pagePath(`${cleanFolder}/${fileName}`, 'Target');
+    const current = readText(destination);
+    if (current !== null && destination !== target) {
+      throw new Error(`${destination} already exists. Merge the proposal into it instead.`);
+    }
+
+    const at = today(now());
+    const proposed = readFileSync(join(root, source), 'utf8');
+    const page = removeHeaderField(setHeaderField(proposed, 'verified', at), 'target');
+    const fields = frontmatter(page);
+    const problems = pageProblems(destination, page, fields);
+    if (problems.length > 0) throw new Error(`Fix the proposal before promoting it:\n${problems.join('\n')}`);
+
+    const description = fields?.get('description')?.trim() ?? '';
+    const indexBefore = readText('index.md');
+    if (indexBefore === null) throw new Error('knowledge/index.md is missing.');
+    const indexed = current !== null && indexBefore.includes(`\`${destination}\``);
+    const row = `| ${cell(when ?? description)} | \`${destination}\` | ${cell(gives ?? description)} |`;
+    const indexAfter = indexed ? indexBefore : `${indexBefore.trimEnd()}\n${row}\n`;
+    if (lineCount(indexAfter) > INDEX_MAX_LINES) {
+      throw new Error(`index.md would be ${lineCount(indexAfter)} lines; the cap is ${INDEX_MAX_LINES}. Merge into an existing page instead.`);
+    }
+
+    return apply('promote', id, destination, [
+      { path: destination, before: current, after: page },
+      ...(indexed ? [] : [{ path: 'index.md', before: indexBefore, after: indexAfter }]),
+      logLine(at, current === null
+        ? `promoted \`${source}\` to \`${destination}\`, confirmed by the owner in the app.`
+        : `replaced \`${destination}\` with \`${source}\`, confirmed by the owner in the app.`),
+      { path: source, before: proposed, after: null },
+    ]);
+  };
+
+  /**
+   * Fold a proposal into an existing page and remove it from `proposals/`. Refuses a page outside `knowledge/`,
+   * a page that doesn't exist (promote instead), and a result that would fail `pnpm knowledge`.
+   */
+  const mergeProposal = (id: string, { into, text }: MergeOptions): ProposalChange => {
+    const source = proposalPath(id);
+    const target = pagePath(into, 'Target');
+    const current = readText(target);
+    if (current === null) throw new Error(`${target} doesn't exist. Promote the proposal to create it.`);
+
+    const at = today(now());
+    const proposed = readFileSync(join(root, source), 'utf8');
+    const merged = text ?? setHeaderField(
+      addSources(`${current.trimEnd()}\n\n${body(proposed).trim()}\n`, sourceItems(proposed)),
+      'verified', at,
+    );
+    const problems = pageProblems(target, merged, frontmatter(merged));
+    if (problems.length > 0) throw new Error(`The merged page would fail the knowledge check:\n${problems.join('\n')}`);
+
+    return apply('merge', id, target, [
+      { path: target, before: current, after: merged },
+      logLine(at, `merged \`${source}\` into \`${target}\`, confirmed by the owner in the app.`),
+      { path: source, before: proposed, after: null },
+    ]);
+  };
+
+  /** Remove a proposal without using it. The backup keeps its text for undo. */
+  const discardProposal = (id: string): ProposalChange => {
+    const source = proposalPath(id);
+    return apply('discard', id, null, [{ path: source, before: readFileSync(join(root, source), 'utf8'), after: null }]);
+  };
+
+  const readChange = (changeId: string): ProposalChange => {
+    if (!/^[\w.-]+$/.test(changeId)) throw new Error(`Not a backup ID: ${changeId}`);
+    const file = join(backups, changeId, 'change.json');
+    if (!existsSync(file)) throw new Error(`No backup ${changeId} in ${backups}.`);
+    return JSON.parse(readFileSync(file, 'utf8')) as ProposalChange;
+  };
+
+  /**
+   * Reverse a promote, merge or discard from its backup: every file goes back to its text from before the change.
+   * Refuses when a file has changed since (say the promoted page was edited), so undo never loses newer work.
+   */
+  const undoProposalChange = (changeId: string): ProposalChange => {
+    const change = readChange(changeId);
+    if (change.undoneAt) throw new Error(`${changeId} was already undone at ${change.undoneAt}.`);
+    const changed = change.files.filter(({ path, after }) => readText(path) !== after).map(({ path }) => path);
+    if (changed.length > 0) {
+      throw new Error(`Can't undo: changed since then: ${changed.join(', ')}. Restore by hand from ${join(backups, changeId, 'change.json')}.`);
+    }
+    writeFiles([...change.files].reverse().map(({ path, before }) => ({ path, text: before })));
+    const undone = { ...change, undoneAt: now().toISOString() };
+    writeFileAtomic(join(backups, changeId, 'change.json'), JSON.stringify(undone, null, 2) + '\n');
+    return undone;
+  };
+
+  /** The folders a proposal can be promoted into and the pages it can be merged into, for the app's pickers. */
+  const listTargets = (): ProposalTargets => {
+    const folders: string[] = [];
+    const pages: string[] = [];
+    const walk = (relativeDir: string): void => {
+      for (const entry of readdirSync(join(root, relativeDir), { withFileTypes: true })) {
+        if (entry.name.startsWith('.')) continue;
+        const path = relativeDir ? `${relativeDir}/${entry.name}` : entry.name;
+        if (entry.isDirectory()) {
+          if (path === PROPOSALS_DIR) continue;
+          folders.push(path);
+          walk(path);
+        } else if (entry.isFile() && entry.name.endsWith('.md') && !NOT_PAGES.has(path) && entry.name !== 'README.md') {
+          pages.push(path);
+        }
+      }
+    };
+    if (existsSync(root)) walk('');
+    return { folders: folders.sort(), pages: pages.sort() };
+  };
+
+  return {
+    listProposals, readProposal, listTargets, promoteProposal, mergeProposal, discardProposal, undoProposalChange,
+    /** The ticket's name for undo. It reverses merges and discards too. */
+    undoPromotion: undoProposalChange,
+  };
+};

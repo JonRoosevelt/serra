@@ -1,0 +1,8 @@
+# Secret scanning config: `gitleaks dir .` or `gitleaks git .`
+# Test fixtures use obviously fake Slack tokens ending in "fixturevalue"; nothing else is allowlisted.
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Fake Slack tokens in tests"
+regexes = ['''(xoxb|xapp)-[0-9A-Za-z-]*fixturevalue''']

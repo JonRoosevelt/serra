@@ -1,0 +1,27 @@
+// What every IPC handler gets from the main process. Handlers only parse input, call a service in `src/` and
+// return its result (spike, Architecture); this context is how they reach the profile and the app.
+import type { PrefsStore } from '../prefs.ts';
+import type { StatusSource } from '../status.ts';
+import type { AppInfo, SerraPushes } from '../bridge.ts';
+
+export interface HandlerContext {
+  /** The profile folder in use. Throws a message for the window when none is selected. */
+  profileDir(): string;
+  /** Like `profileDir()`, but null instead of throwing. */
+  profileDirOrNull(): string | null;
+  prefs: PrefsStore;
+  status: StatusSource;
+  /** Versions and platform; `profileDir` is filled in per call. */
+  runtime: Omit<AppInfo, 'profileDir'>;
+  /** Opens a web link in the default browser. The caller has checked it is `http(s):`. */
+  openExternal(url: string): Promise<void>;
+  /** Opens a folder in Finder. */
+  openPath(path: string): Promise<void>;
+  /** Sends a push to the open window, if any (APP-19 streams release log lines). Absent in tests that don't need it. */
+  push?<P extends keyof SerraPushes>(channel: P, payload: SerraPushes[P]): void;
+}
+
+/** The error a stub throws until its ticket fills it in. The window shows the message. */
+export const notImplemented = (method: string, ticket: string): never => {
+  throw new Error(`${method} isn't available yet (${ticket}).`);
+};

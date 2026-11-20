@@ -1,0 +1,15 @@
+# Changelog
+
+Serra follows [Semantic Versioning](https://semver.org) once it reaches 1.0. Until then, any alpha may change the profile or state format; such changes are called out here.
+
+## 0.1.0-alpha.1 (unreleased)
+
+First public alpha, for trying Serra locally on macOS.
+
+- Slack bot: mentions and DMs become T3 Code threads in fresh Git worktrees; replies, clarifying questions (with buttons), images and files go back to the Slack thread.
+- Private per-bot profiles outside the checkout: settings, tokens (`.env`, Keychain or 1Password), brief and policy, knowledge, state and logs.
+- `pnpm run setup` and `./scripts/install.sh` for a new bot; `pnpm run doctor` to check the configuration, T3, GitHub and Slack.
+- Background service under launchd with prepare, activate, status, restart and rollback.
+- Knowledge interview and a proposals queue for teaching the bot how you work.
+- Automatic investigations of messages in configured alert channels.
+- macOS menubar app (built locally, unsigned): first-run wizard, Jobs, Knowledge, Brief and policy, Settings, Secrets, Tools, Updates and Diagnostics.

@@ -1,0 +1,13 @@
+import { launch, shot, go } from './lib.mjs';
+const { app, page } = await launch({ profile: '/tmp/serra-qa/profile', userData: '/tmp/serra-qa/ud' });
+await page.waitForTimeout(1000); await go(page, '/settings/people'); await page.waitForTimeout(500);
+const k = async (q) => { await page.keyboard.press('Meta+k'); await page.waitForTimeout(300); await page.keyboard.type(q); await page.waitForTimeout(400); return page.evaluate(() => [...document.querySelectorAll('dialog[data-command-palette] [role=option]')].map((o) => o.textContent).slice(0, 4)); };
+console.log('clean up:', await k('clean up')); await page.keyboard.press('Enter'); await page.waitForTimeout(3500);
+console.log('hash:', page.url().replace(/.*#/, '#'), 'dialog:', (await page.evaluate(() => document.querySelector('dialog[open]')?.innerText))?.slice(0, 120));
+await shot(page, 'I6-palette-cleanup'); await page.keyboard.press('Escape'); await page.waitForTimeout(400);
+console.log('promote:', await k('promote')); await page.keyboard.press('Enter'); await page.waitForTimeout(800);
+console.log('choices:', await page.evaluate(() => [...document.querySelectorAll('dialog[data-command-palette] [role=option]')].map((o) => o.textContent)));
+await page.keyboard.type('reviews'); await page.waitForTimeout(300); await page.keyboard.press('Enter'); await page.waitForTimeout(1500);
+console.log('hash:', page.url().replace(/.*#/, '#'), 'selected:', await page.evaluate(() => document.querySelector('[data-serra-main] h2')?.textContent), (await page.evaluate(() => document.body.innerText.match(/Changes [^\n]*/)))?.[0]);
+await shot(page, 'I7-palette-promote-opened');
+await app.close();
