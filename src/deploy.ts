@@ -87,6 +87,23 @@ const codeCommit = async (root: string): Promise<{ commit?: string; dirty?: bool
     return { commit, dirty: changes.length > 0 };
   } catch { return {}; }
 };
+/**
+ * What a packaged app's `release-source` says about the code it was built from: `release.json`, written by
+ * `pnpm app:build` with the version and commit, since the copy itself has no git. Empty for a checkout.
+ */
+export const RELEASE_INFO = 'release.json';
+const shippedBuild = (root: string): { appVersion?: string; commit?: string; fromApp?: boolean } => {
+  const read = (name: string): Record<string, unknown> => {
+    try { return JSON.parse(readFileSync(join(root, name), 'utf8')) as Record<string, unknown>; } catch { return {}; }
+  };
+  const info = read(RELEASE_INFO);
+  const version = typeof info.version === 'string' ? info.version : read('package.json').version;
+  return {
+    ...(typeof version === 'string' ? { appVersion: version } : {}),
+    ...(existsSync(join(root, RELEASE_INFO)) ? { fromApp: true } : {}),
+    ...(typeof info.commit === 'string' && /^[0-9a-f]{40}$/.test(info.commit) ? { commit: info.commit } : {}),
+  };
+};
 /** The branch Updates follows in the profile's update source when `updates.ref` isn't set. */
 export const DEFAULT_UPDATES_REF = 'origin/main';
 
@@ -97,7 +114,7 @@ const warnIfBehind = async (root: string, commit: string, ref: string, log: Depl
     if (target && target !== commit) log(`Note: ${root} is at ${commit.slice(0, 12)}, not ${ref} (${target.slice(0, 12)}). Run git pull there to release ${ref}.`);
   } catch { /* no such ref: status reports it */ }
 };
-export const releasedPaths = ['src', 'templates', 'docs', 'examples', 'README.md', 'package.json', 'pnpm-lock.yaml', 'tsconfig.json'];
+export const releasedPaths = ['src', 'templates', 'docs', 'examples', 'README.md', 'package.json', 'pnpm-lock.yaml', 'tsconfig.json', RELEASE_INFO];
 /** What the daemon can't run without. The rest of `releasedPaths` is copied when it is there. */
 const requiredPaths = ['src', 'templates', 'examples', 'package.json', 'pnpm-lock.yaml', 'tsconfig.json'];
 
@@ -118,6 +135,7 @@ export const stageReleaseSource = (from: string, to: string): void => {
   rmSync(to, { recursive: true, force: true });
   mkdirSync(to, { recursive: true });
   for (const name of releasedPaths) {
+    if (!existsSync(join(from, name))) continue;
     // docs/app is screenshots: megabytes the daemon never reads.
     cpSync(join(from, name), join(to, name), { recursive: true, filter: (path) => relative(join(from, 'docs/app'), path).startsWith('..') });
   }
@@ -161,6 +179,10 @@ export interface Prepared {
   commit?: string;
   /** The checkout had uncommitted changes in the copied files, so the release is not exactly `commit`. */
   dirty?: boolean;
+  /** The Serra version of the code (its package.json), like `0.1.0-alpha.2`. Absent on releases made before it was recorded. */
+  appVersion?: string;
+  /** Made from the code a packaged app ships (`release-source`), not from a checkout. The bot follows the app only with these. */
+  fromApp?: boolean;
 }
 interface Activation {
   version: 1;
@@ -196,32 +218,38 @@ export const prepareRelease = async (directory: string, { root, install = true, 
   const release = join(directory, 'releases', id);
   log(`Copying code into ${release}`);
   mkdirSync(release, { recursive: true, mode: 0o700 });
-  for (const name of releasedPaths) {
-    // The packaged copy leaves out docs/app (screenshots) and nothing the daemon reads.
-    if (!existsSync(join(root, name))) continue;
-    cpSync(join(root, name), join(release, name), { recursive: true });
-  }
-  const source = await codeCommit(root);
-  if (source.commit) log(`Code at ${source.commit.slice(0, 12)}${source.dirty ? ' with uncommitted changes' : ''}`);
-  if (source.commit && updates) await warnIfBehind(root, source.commit, updates.ref ?? DEFAULT_UPDATES_REF, log);
-  writeFileSync(join(release, 'service.plist'), servicePlist({ directory, release, label: config.serviceLabel, node }), { mode: 0o600 });
-  const releaseFiles = files(release);
-  const releaseHash = digest(release, releaseFiles);
-  if (install) {
-    log('Installing production dependencies');
-    // The release's Node folder is added after PATH: opened from Finder, the app's PATH has no Node, and an nvm or
-    // official install keeps pnpm or corepack (a `#!/usr/bin/env node` script) only next to `node`.
-    const path = [process.env.PATH, dirname(node)].filter(Boolean).join(delimiter);
-    const pnpm = pnpmCommand(path);
-    // Corepack would otherwise stop to ask before fetching the pinned pnpm, with no terminal to answer it.
-    const env = { ...process.env, PATH: path, ...(pnpm.cmd === 'corepack' ? { COREPACK_ENABLE_DOWNLOAD_PROMPT: '0' } : {}) };
-    // Run from the release: Corepack picks pnpm's version from the package.json in the working directory, not from
-    // `--dir`, and the app's working directory is `/`, where it would fetch the newest pnpm, which refuses the pin.
-    await runLines(pnpm.cmd, [...pnpm.args, '--dir', release, 'install', '--prod', '--frozen-lockfile', '--ignore-scripts'], log, 60_000, env, release);
-  }
-  mkdirSync(join(directory, 'logs'), { recursive: true, mode: 0o700 });
-  const prepared: Prepared = { version: 1, release, releaseHash, releaseFiles, node, label: config.serviceLabel, preparedAt, ...source };
-  writeJson(join(directory, 'prepared.json'), prepared);
+  // Marks the build as in progress until prepared.json names it, so pruning in another process leaves it alone.
+  const building = `${release}${BUILDING}`;
+  writeFileSync(building, String(process.pid));
+  let prepared: Prepared;
+  try {
+    for (const name of releasedPaths) {
+      // The packaged copy leaves out docs/app (screenshots) and nothing the daemon reads.
+      if (!existsSync(join(root, name))) continue;
+      cpSync(join(root, name), join(release, name), { recursive: true });
+    }
+    const source = { ...shippedBuild(root), ...await codeCommit(root) };
+    if (source.commit) log(`Code at ${source.commit.slice(0, 12)}${source.dirty ? ' with uncommitted changes' : ''}`);
+    if (source.commit && updates) await warnIfBehind(root, source.commit, updates.ref ?? DEFAULT_UPDATES_REF, log);
+    writeFileSync(join(release, 'service.plist'), servicePlist({ directory, release, label: config.serviceLabel, node }), { mode: 0o600 });
+    const releaseFiles = files(release);
+    const releaseHash = digest(release, releaseFiles);
+    if (install) {
+      log('Installing production dependencies');
+      // The release's Node folder is added after PATH: opened from Finder, the app's PATH has no Node, and an nvm or
+      // official install keeps pnpm or corepack (a `#!/usr/bin/env node` script) only next to `node`.
+      const path = [process.env.PATH, dirname(node)].filter(Boolean).join(delimiter);
+      const pnpm = pnpmCommand(path);
+      // Corepack would otherwise stop to ask before fetching the pinned pnpm, with no terminal to answer it.
+      const env = { ...process.env, PATH: path, ...(pnpm.cmd === 'corepack' ? { COREPACK_ENABLE_DOWNLOAD_PROMPT: '0' } : {}) };
+      // Run from the release: Corepack picks pnpm's version from the package.json in the working directory, not from
+      // `--dir`, and the app's working directory is `/`, where it would fetch the newest pnpm, which refuses the pin.
+      await runLines(pnpm.cmd, [...pnpm.args, '--dir', release, 'install', '--prod', '--frozen-lockfile', '--ignore-scripts'], log, 60_000, env, release);
+    }
+    mkdirSync(join(directory, 'logs'), { recursive: true, mode: 0o700 });
+    prepared = { version: 1, release, releaseHash, releaseFiles, node, label: config.serviceLabel, preparedAt, ...source };
+    writeJson(join(directory, 'prepared.json'), prepared);
+  } finally { rmSync(building, { force: true }); }
   for (const action of ['activate', 'rollback', 'status']) {
     writeFileSync(join(directory, `${action}.sh`), `#!/usr/bin/env bash\nset -euo pipefail\nexec ${shellQuote(node)} ${shellQuote(join(release, 'src/manage.ts'))} ${action} --profile ${shellQuote(directory)} "$@"\n`, { mode: 0o700 });
   }
@@ -288,6 +316,13 @@ export interface DeployOptions {
   driver?: ServiceDriver;
   launchAgentsDir?: string;
   preflight?: (directory: string) => Promise<void>;
+  /**
+   * The last check before the bot is stopped, after the health checks. Throwing refuses the activation with nothing
+   * changed (the bot following the app uses it to recheck that no job started meanwhile).
+   */
+  beforeStop?: () => void | Promise<void>;
+  /** Checks the plan read under the deployment lock (the bot following the app: is it the app's build?). Throwing refuses. */
+  expect?: (plan: Prepared) => void;
   log?: DeployLog;
 }
 const defaults = (options: DeployOptions) => ({
@@ -322,6 +357,17 @@ export const activationPhase = (directory: string): Activation['phase'] | null =
 };
 
 /**
+ * Whether rollback has something to do: an interrupted cutover, or an activation with an earlier release to go back
+ * to. Undoing the first activation would leave no bot running, so it doesn't count.
+ */
+export const canRollBack = (directory: string): boolean => {
+  const path = join(resolve(directory), 'activation.json');
+  if (!existsSync(path)) return false;
+  const transaction = readJson<Activation>(path);
+  return transaction.phase === 'switching' || (transaction.phase === 'active' && transaction.previousActive !== undefined);
+};
+
+/**
  * A failed cutover. `restored` says whether the previous installation is back. When it isn't, the owner has to run
  * rollback once the cause is fixed.
  */
@@ -340,6 +386,7 @@ export const activate = async (directory: string, options: DeployOptions = {}): 
     const problem = preparedProblems(directory)[0];
     if (problem) throw new Error(problem);
     const plan = readJson<Prepared>(join(directory, 'prepared.json'));
+    options.expect?.(plan);
     const activePath = join(directory, 'active.json');
     const previousActive = existsSync(activePath) ? readJson<Prepared>(activePath) : undefined;
     log('Running health checks');
@@ -350,6 +397,7 @@ export const activate = async (directory: string, options: DeployOptions = {}): 
     const wasLoaded = await driver.loaded(plan.label);
     // A fresh installation must never take over another profile's existing service.
     if ((hadPlist || wasLoaded) && !previousActive) throw new Error(`Service ${plan.label} already exists. Choose another bot ID.`);
+    await options.beforeStop?.();
     const backup = join(directory, 'backups', new Date().toISOString().replace(/[:.]/g, '-'));
     mkdirSync(backup, { recursive: true, mode: 0o700 });
     if (hadPlist) copyPrivate(plist, join(backup, 'service.plist'));
@@ -372,6 +420,10 @@ export const activate = async (directory: string, options: DeployOptions = {}): 
       transaction.phase = 'active';
       writeJson(join(directory, 'activation.json'), transaction);
       log('Bot connected. The new release is active.');
+      try {
+        const removed = pruneReleases(directory);
+        if (removed.length) log(`Removed ${removed.length} old ${removed.length === 1 ? 'release' : 'releases'}`);
+      } catch (error) { log(`Couldn't remove old releases: ${String(error)}`); }
     } catch (error) {
       log(`Cutover failed: ${String(error)}`);
       log('Restoring the previous installation');
@@ -400,6 +452,52 @@ const restore = async (directory: string, transaction: Activation, driver: Servi
   log('Previous installation restored.');
 };
 
+/** Beside a release folder while prepare is still building it: `<id>.building`, holding prepare's PID. */
+const BUILDING = '.building';
+
+/** The `releases/` folder names prepare makes: `2026-11-21T16-08-23-951Z-85116`. */
+const RELEASE_ID = /^\d{4}-\d\d-\d\dT\d\d-\d\d-\d\d-\d{3}Z-\d+$/;
+
+/**
+ * Removes old release folders, keeping the active one, the one before it (what rollback switches back to) and a
+ * prepared one that isn't active yet. Only folders named like a release under `<profile>/releases/` are touched.
+ * Returns the folders removed.
+ */
+export const pruneReleases = (directory: string): string[] => {
+  directory = resolve(directory);
+  const root = join(directory, 'releases');
+  if (!existsSync(root)) return [];
+  const keep = new Set<string>();
+  const remember = (release: Prepared | undefined | null): void => { if (release?.release) keep.add(resolve(release.release)); };
+  const read = <T>(name: string): T | null => existsSync(join(directory, name)) ? readJson<T>(join(directory, name)) : null;
+  remember(read<Prepared>('active.json'));
+  remember(read<Prepared>('prepared.json'));
+  const transaction = read<Activation>('activation.json');
+  remember(transaction?.prepared);
+  remember(transaction?.previousActive);
+  // A folder made after the active release may be a build still in progress (a prepare running in another process
+  // writes prepared.json only when it finishes), so only older ones go.
+  const activeId = read<Prepared>('active.json')?.release.split('/').pop() ?? '';
+  const removed: string[] = [];
+  // Markers left by a prepare that crashed (its process is gone) are swept.
+  for (const entry of readdirSync(root, { withFileTypes: true })) {
+    if (!entry.isFile() || !entry.name.endsWith(BUILDING)) continue;
+    const marker = join(root, entry.name);
+    try { if (!processAlive(Number(readFileSync(marker, 'utf8')))) rmSync(marker, { force: true }); } catch { /* gone already */ }
+  }
+  for (const entry of readdirSync(root, { withFileTypes: true })) {
+    const path = join(root, entry.name);
+    if (!entry.isDirectory() || !RELEASE_ID.test(entry.name) || keep.has(path) || entry.name > activeId) continue;
+    // A build still in progress (its prepare's process is alive) stays.
+    try { if (processAlive(Number(readFileSync(`${path}${BUILDING}`, 'utf8')))) continue; } catch { /* no marker */ }
+    // Prepare names its build in prepared.json before removing its marker, so a fresh read catches one just finished.
+    if (read<Prepared>('prepared.json')?.release === path) continue;
+    rmSync(path, { recursive: true, force: true });
+    removed.push(path);
+  }
+  return removed;
+};
+
 export const rollback = async (directory: string, options: DeployOptions = {}): Promise<void> => {
   directory = resolve(directory);
   const unlock = acquireLock(join(directory, 'deployment.lock'));
@@ -407,6 +505,8 @@ export const rollback = async (directory: string, options: DeployOptions = {}): 
     if (!existsSync(join(directory, 'activation.json'))) throw new Error('Nothing to roll back: no release was activated for this profile');
     const transaction = readJson<Activation>(join(directory, 'activation.json'));
     if (transaction.phase === 'rolled-back') throw new Error('Already rolled back');
+    // Undoing the first activation would stop the bot and remove its service, leaving nothing running.
+    if (transaction.phase === 'active' && !transaction.previousActive) throw new Error('Nothing to roll back to: this is the first release installed for this profile');
     const { driver, log } = defaults(options);
     await restore(directory, transaction, driver, log);
   } finally { unlock(); }

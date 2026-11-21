@@ -4,7 +4,7 @@ import { existsSync, mkdtempSync, rmSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { app, BrowserWindow, ipcMain, nativeTheme, shell } from 'electron';
+import { app, BrowserWindow, ipcMain, nativeTheme, net, Notification, shell } from 'electron';
 import { defaultProfileRoot, profileArgument } from '../../src/config.ts';
 import { pushChannel } from './bridge.ts';
 import { createHandlers, registerHandlers } from './ipc/index.ts';
@@ -22,6 +22,8 @@ import { runSmokeChecks } from './smoke.ts';
 import { followProposals, type ProposalsFollower } from './proposals-watch.ts';
 import { toolPath } from './tool-path.ts';
 import { stopAll as stopToolChecks } from '../../src/exec.ts';
+import { releasesUrl } from '../../src/app-updates.ts';
+import { createAppUpdater, type AppUpdater } from './app-updater.ts';
 
 // The build rewrites `import.meta.url` to this source file, so this is `app/` in the checkout (see app/build.ts).
 const appDir = fileURLToPath(new URL('..', import.meta.url));
@@ -79,7 +81,51 @@ const start = async (): Promise<void> => {
       tray?.refresh();
     },
   };
+  const push: NonNullable<HandlerContext['push']> = (channel, payload) => {
+    for (const target of BrowserWindow.getAllWindows()) {
+      if (!target.isDestroyed() && !target.webContents.isDestroyed()) target.webContents.send(pushChannel(channel), payload);
+    }
+  };
+  /** The running Serra.app: `.../Serra.app/Contents/MacOS/Serra`, three folders up. */
+  const bundlePath = app.isPackaged ? join(app.getPath('exe'), '../../..') : null;
+  // SERRA_UPDATES_FEED (QA's fake feed) turns updates on in a copy run from source; installing then opens the disk image.
+  // In a packaged app only a feed on this Mac is accepted, so an environment variable can't point updates elsewhere.
+  const loopback = (value: string): boolean => {
+    try { const url = new URL(value); return url.protocol === 'http:' && ['127.0.0.1', 'localhost', '[::1]'].includes(url.hostname); } catch { return false; }
+  };
+  const feed = process.env.SERRA_UPDATES_FEED && (!app.isPackaged || loopback(process.env.SERRA_UPDATES_FEED))
+    ? process.env.SERRA_UPDATES_FEED : undefined;
+  const appUpdater: AppUpdater = createAppUpdater({
+    current: app.getVersion(),
+    arch: process.arch,
+    unavailable: smoke ? 'Updates are off in the smoke test.' : app.isPackaged || feed ? null : 'This copy runs from source. Pull the repository to update it.',
+    dir: join(app.getPath('userData'), 'updates'),
+    // Electron's net follows the system's proxy settings. Files it writes carry no quarantine flag.
+    fetch: (url, init) => net.fetch(url, init),
+    feedUrl: releasesUrl({ SERRA_UPDATES_FEED: feed }),
+    relaunchArgs: process.argv.slice(1),
+    bundlePath,
+    getChoice: () => stored.get().includePrereleases,
+    setChoice: (choice) => stored.set({ ...stored.get(), includePrereleases: choice }),
+    quit: () => app.quit(),
+    openPath: async (path) => { const error = await shell.openPath(path); if (error) throw new Error(error); },
+    push: (view) => push('appUpdate', view),
+    log: (line) => console.log(`[serra] app update: ${line}`),
+  });
+  const timers: NodeJS.Timeout[] = [];
+  const every = (firstMs: number, everyMs: number, task: () => void): void => {
+    if (smoke) return;
+    timers.push(setTimeout(() => { task(); timers.push(setInterval(task, everyMs)); }, firstMs));
+  };
+  // Look for a new release 15 seconds after launch, then every 6 hours. Nothing downloads without a click.
+  every(15_000, 6 * 60 * 60_000, () => { void appUpdater.check(); });
+  const quitGuards: (() => Promise<unknown> | null)[] = [];
   const context: HandlerContext = {
+    appUpdater,
+    botFollowsApp: app.isPackaged,
+    guardQuit: (pending) => { quitGuards.push(pending); },
+    every,
+    expectStop: () => notifications?.expectStop(),
     profileDirOrNull,
     profileDir: () => {
       const directory = profileDirOrNull();
@@ -94,11 +140,7 @@ const start = async (): Promise<void> => {
       const error = await shell.openPath(path);
       if (error) throw new Error(error);
     },
-    push: (channel, payload) => {
-      for (const target of BrowserWindow.getAllWindows()) {
-        if (!target.isDestroyed() && !target.webContents.isDestroyed()) target.webContents.send(pushChannel(channel), payload);
-      }
-    },
+    push,
   };
   proposals = followProposals(() => context.push?.('proposals', null));
   proposals.follow(profileDirOrNull());
@@ -140,7 +182,20 @@ const start = async (): Promise<void> => {
     context.push?.('navigate', target);
   };
   app.on('second-instance', show);
+  // A bot switch stops the old bot before starting the new one: quitting halfway would leave none running.
+  let waitingToQuit = false;
+  app.on('before-quit', (event) => {
+    const pending = quitGuards.map((guard) => guard()).filter((p): p is Promise<unknown> => p !== null);
+    if (!pending.length) return;
+    event.preventDefault();
+    console.log('[serra] waiting for the bot switch to finish before quitting');
+    // Without a word, Quit would look ignored for the few seconds the switch takes.
+    if (!waitingToQuit && Notification.isSupported()) new Notification({ title: 'Serra', body: 'Finishing the bot restart, then quitting.' }).show();
+    waitingToQuit = true;
+    void Promise.allSettled(pending).then(() => app.quit());
+  });
   app.on('will-quit', () => {
+    for (const timer of timers) clearTimeout(timer);
     stopToolChecks();
     notifications?.stop(); notifications = null; tray?.destroy(); tray = null; proposals?.close(); proposals = null; status.close();
   });
