@@ -7,6 +7,16 @@ import { createKnowledge } from '../src/knowledge.ts';
 import { runCli } from '../src/manage.ts';
 import { createProposals } from '../src/proposals.ts';
 
+/** What the app shows the owner before an approval: the proposal and the page it would change. */
+const shown = (service: { readProposal: (id: string) => { proposed: string; current: string | null; proposal: { target: string | null } } }, id: string) => {
+  try {
+    const { proposed, current, proposal } = service.readProposal(id);
+    return { proposal: proposed, path: proposal.target, page: current };
+  } catch {
+    return { proposal: '', path: null, page: null };
+  }
+};
+
 const NOW = new Date('2026-11-19T12:00:00Z');
 
 const page = (fields: { description: string; verified?: string; sources?: string[]; target?: string }, text: string): string => [
@@ -62,7 +72,7 @@ test('reads a proposal next to the page it changes, or null for a new page', (t)
 
 test('promote moves the page, adds its index row and a log line, verifies it, and writes a backup', (t) => {
   const { dir, knowledge, read, service } = profile(t);
-  const change = service.promoteProposal('2026-11-16-deploys.md', { folder: 'ops', when: 'a deploy question' });
+  const change = service.promoteProposal('2026-11-16-deploys.md', { reviewed: shown(service, '2026-11-16-deploys.md'), folder: 'ops', when: 'a deploy question' });
 
   assert.equal(change.page, 'ops/deploys.md');
   assert.equal(read('proposals/2026-11-16-deploys.md'), null, 'gone from proposals/');
@@ -88,7 +98,7 @@ test('promote replaces the page a proposal targets and keeps its index row; undo
   // that page as owner/reviews.md, a duplicate, and Merge appended the whole page to the old one.
   const { read, snapshot, service } = profile(t);
   const before = snapshot();
-  const change = service.promoteProposal('2026-11-18-reviews.md', { folder: 'owner' });
+  const change = service.promoteProposal('2026-11-18-reviews.md', { reviewed: shown(service, '2026-11-18-reviews.md'), folder: 'owner' });
 
   assert.equal(change.page, 'owner/role.md');
   const page = read('owner/role.md')!;
@@ -109,7 +119,7 @@ test('promote replaces the page a proposal targets and keeps its index row; undo
 test('a targeted proposal promoted into another folder becomes a new page there', (t) => {
   const { read, service } = profile(t);
   const role = read('owner/role.md');
-  const change = service.promoteProposal('2026-11-18-reviews.md', { folder: 'ops' });
+  const change = service.promoteProposal('2026-11-18-reviews.md', { reviewed: shown(service, '2026-11-18-reviews.md'), folder: 'ops' });
   assert.equal(change.page, 'ops/reviews.md');
   assert.doesNotMatch(read('ops/reviews.md')!, /^target:/m);
   assert.equal(read('owner/role.md'), role);
@@ -119,7 +129,7 @@ test('a targeted proposal promoted into another folder becomes a new page there'
 test('undo restores every file a promotion touched, once', (t) => {
   const { snapshot, service } = profile(t);
   const before = snapshot();
-  const change = service.promoteProposal('2026-11-16-deploys.md', { folder: 'ops' });
+  const change = service.promoteProposal('2026-11-16-deploys.md', { reviewed: shown(service, '2026-11-16-deploys.md'), folder: 'ops' });
   assert.notDeepEqual(snapshot(), before);
   service.undoPromotion(change.id);
   assert.deepEqual(snapshot(), before);
@@ -128,10 +138,10 @@ test('undo restores every file a promotion touched, once', (t) => {
 
 test('undo refuses when a file changed after the promotion, and changes nothing', (t) => {
   const { write, snapshot, service } = profile(t);
-  const change = service.promoteProposal('2026-11-16-deploys.md', { folder: 'ops' });
+  const change = service.promoteProposal('2026-11-16-deploys.md', { reviewed: shown(service, '2026-11-16-deploys.md'), folder: 'ops' });
   write('ops/deploys.md', 'Edited by hand after promoting.\n');
   const edited = snapshot();
-  assert.throws(() => service.undoProposalChange(change.id), /changed since then: ops\/deploys\.md/);
+  assert.throws(() => service.undoProposalChange(change.id), /ops\/deploys\.md changed outside Serra/, "a hand edit is reviewed in Pages before anything is undone over it");
   assert.deepEqual(snapshot(), edited);
   assert.throws(() => service.undoProposalChange('../../etc'), /Not a backup ID/);
   assert.throws(() => service.undoProposalChange('nope'), /No backup nope/);
@@ -140,7 +150,7 @@ test('undo refuses when a file changed after the promotion, and changes nothing'
 test('promote refuses targets outside knowledge/, inside proposals/, onto special files or existing pages', (t) => {
   const { dir, snapshot, service } = profile(t);
   const before = snapshot();
-  const promote = (folder: string, name?: string) => () => service.promoteProposal('2026-11-16-deploys.md', { folder, ...(name ? { name } : {}) });
+  const promote = (folder: string, name?: string) => () => service.promoteProposal('2026-11-16-deploys.md', { reviewed: shown(service, '2026-11-16-deploys.md'), folder, ...(name ? { name } : {}) });
   assert.throws(promote('../outside'), /inside knowledge\//);
   assert.throws(promote('/tmp'), /inside knowledge\//);
   assert.throws(promote('ops/../../outside'), /inside knowledge\//);
@@ -160,19 +170,21 @@ test('promote refuses targets outside knowledge/, inside proposals/, onto specia
 test('promote refuses a proposal that would fail the knowledge check or overflow the index', (t) => {
   const { write, read, service } = profile(t);
   write('proposals/2026-11-17-bare.md', 'No header at all.\n');
-  assert.throws(() => service.promoteProposal('2026-11-17-bare.md', { folder: 'ops' }), /no header/);
+  assert.throws(() => service.promoteProposal('2026-11-17-bare.md', { reviewed: shown(service, '2026-11-17-bare.md'), folder: 'ops' }), /no header/);
   write('index.md', INDEX + '| row |\n'.repeat(60));
-  assert.throws(() => service.promoteProposal('2026-11-16-deploys.md', { folder: 'ops' }), /cap is 60/);
+  assert.throws(() => service.promoteProposal('2026-11-16-deploys.md', { reviewed: shown(service, '2026-11-16-deploys.md'), folder: 'ops' }), /cap is 60/);
   assert.notEqual(read('proposals/2026-11-16-deploys.md'), null);
-  assert.throws(() => service.promoteProposal('../index.md', { folder: 'ops' }), /inside knowledge\//);
+  assert.throws(() => service.promoteProposal('../index.md', { reviewed: shown(service, '../index.md'), folder: 'ops' }), /inside knowledge\//);
 });
 
-test('merge appends the body, adds the sources, verifies the page and can be undone', (t) => {
+test('merge replaces the page with the proposal, adds the sources, verifies the page and can be undone', (t) => {
   const { read, snapshot, service } = profile(t);
   const before = snapshot();
-  const change = service.mergeProposal('2026-11-18-reviews.md', { into: 'owner/role.md' });
+  const change = service.mergeProposal('2026-11-18-reviews.md', { reviewed: shown(service, '2026-11-18-reviews.md'), into: 'owner/role.md' });
   const merged = read('owner/role.md')!;
-  assert.match(merged, /Owns the API\.\n\nAlso reviews every PR\.\n$/);
+  assert.match(merged, /\nAlso reviews every PR\.\n$/);
+  assert.doesNotMatch(merged, /Owns the API/, 'the proposal is the whole page: nothing is appended beside the old text');
+  assert.doesNotMatch(merged, /^target:/m);
   assert.match(merged, /^verified: 2026-11-19$/m);
   assert.match(merged, /sources:\n {2}- Owner interview, 2026-11-16\n {2}- https:\/\/slack\.test\/archives\/C1\/p2\n---/);
   assert.equal(merged.match(/^---$/gm)?.length, 2, 'one header only');
@@ -185,13 +197,19 @@ test('merge appends the body, adds the sources, verifies the page and can be und
 
 test('merge takes the owner\'s edited text, and refuses missing, outside or invalid targets', (t) => {
   const { read, service } = profile(t);
-  assert.throws(() => service.mergeProposal('2026-11-18-reviews.md', { into: 'owner/nobody.md' }), /doesn't exist\. Promote/);
-  assert.throws(() => service.mergeProposal('2026-11-18-reviews.md', { into: '../profile.json' }), /inside knowledge\//);
-  assert.throws(() => service.mergeProposal('2026-11-18-reviews.md', { into: 'index.md' }), /not a page/);
-  assert.throws(() => service.mergeProposal('2026-11-18-reviews.md', { into: 'owner/role.md', text: 'no header' }), /no header/);
+  assert.throws(() => service.mergeProposal('2026-11-18-reviews.md', { reviewed: shown(service, '2026-11-18-reviews.md'), into: 'owner/nobody.md' }), /doesn't exist\. Promote/);
+  assert.throws(() => service.mergeProposal('2026-11-18-reviews.md', { reviewed: shown(service, '2026-11-18-reviews.md'), into: '../profile.json' }), /inside knowledge\//);
+  assert.throws(() => service.mergeProposal('2026-11-18-reviews.md', { reviewed: shown(service, '2026-11-18-reviews.md'), into: 'index.md' }), /not a page/);
+  assert.throws(() => service.mergeProposal('2026-11-18-reviews.md', { reviewed: shown(service, '2026-11-18-reviews.md'), into: 'owner/role.md', text: 'no header' }), /no header/);
   const edited = page({ description: 'The owner\'s role', verified: '2026-11-19' }, 'Owns the API and reviews every PR.');
-  service.mergeProposal('2026-11-18-reviews.md', { into: 'owner/role.md', text: edited });
-  assert.equal(read('owner/role.md'), edited);
+  service.mergeProposal('2026-11-18-reviews.md', { reviewed: shown(service, '2026-11-18-reviews.md'), into: 'owner/role.md', text: edited });
+  assert.match(read('owner/role.md')!, /\nOwns the API and reviews every PR\.\n$/);
+  assert.match(read('owner/role.md')!, /https:\/\/slack\.test\/archives\/C1\/p2/, 'the proposal\'s sources are kept');
+});
+
+test('merging a proposal that is not a whole page for the target needs the owner\'s edited page', (t) => {
+  const { service } = profile(t);
+  assert.throws(() => service.mergeProposal('2026-11-16-deploys.md', { reviewed: shown(service, '2026-11-16-deploys.md'), into: 'owner/role.md' }), /isn't a whole page for owner\/role\.md/);
 });
 
 test('discard removes the proposal and undo brings it back', (t) => {
@@ -204,7 +222,7 @@ test('discard removes the proposal and undo brings it back', (t) => {
   assert.equal(read('proposals/notes.md'), text);
 });
 
-test('pnpm bot proposals lists, promotes and undoes through the same service', async (t) => {
+test('pnpm bot proposals lists and shows, and refuses to approve: that is the owner\'s, in the app', async (t) => {
   const { dir, read } = profile(t);
   const run = async (...args: string[]) => {
     const out: string[] = []; const err: string[] = [];
@@ -214,17 +232,12 @@ test('pnpm bot proposals lists, promotes and undoes through the same service', a
   const list = await run();
   assert.equal(list.code, 0);
   assert.match(list.out, /^3 proposals waiting:\n {2}2026-11-18-reviews\.md \(changes owner\/role\.md\) - Review style/);
-
-  const promoted = await run('promote', '2026-11-16-deploys.md', '--folder', 'ops');
-  assert.equal(promoted.code, 0, promoted.err);
-  assert.notEqual(read('ops/deploys.md'), null);
-  const id = /proposals undo (\S+)/.exec(promoted.out)?.[1];
-  assert.ok(id);
-  assert.equal((await run('undo', id)).code, 0);
-  assert.equal(read('ops/deploys.md'), null);
-
-  const refused = await run('promote', '2026-11-16-deploys.md', '--folder', '../..');
-  assert.equal(refused.code, 1);
-  assert.match(refused.err, /inside knowledge\//);
   assert.match((await run('show', '2026-11-18-reviews.md')).out, /--- current: knowledge\/owner\/role\.md/);
+  for (const action of [['promote', '2026-11-16-deploys.md', '--folder', 'ops'], ['merge', '2026-11-16-deploys.md', '--into', 'owner/role.md'], ['discard', '2026-11-16-deploys.md'], ['undo', 'x']]) {
+    const refused = await run(...action);
+    assert.equal(refused.code, 1, action[0]);
+    assert.match(refused.err, /approved in the Serra app/);
+  }
+  assert.equal(read('ops/deploys.md'), null);
+  assert.notEqual(read('proposals/2026-11-16-deploys.md'), null);
 });

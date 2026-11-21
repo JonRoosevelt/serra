@@ -22,11 +22,33 @@ export const pagesHandlers = (context: HandlerContext): Handlers<'pages'> => {
     }
   };
   return {
-    list: () => service().listPages({ roots: roots() }),
+    list: () => {
+      const knowledge = service();
+      // Opening Pages starts the approved copy for a profile that has none yet (one from before it existed).
+      knowledge.seedApproved();
+      return knowledge.listPages({ roots: roots() });
+    },
     read: (path) => service().readPage(pagePath(path)),
-    save: (path, text) => {
+    save: (path, text, expected) => {
       if (typeof text !== 'string') throw new Error('A page is text.');
-      return service().savePage(pagePath(path), text, { roots: roots() }).page;
+      if (expected !== undefined && typeof expected !== 'string') throw new Error('Save the page as you loaded it.');
+      return service().savePage(pagePath(path), text, { roots: roots(), ...(expected === undefined ? {} : { expected }) }).page;
+    },
+    drift: () => service().driftDetails(),
+    acceptDrift: (path, current) => {
+      if (current !== null && typeof current !== 'string') throw new Error('Accept the file as you reviewed it.');
+      service().acceptDrift(pagePath(path), current);
+    },
+    restoreDrift: (path) => { service().restoreDrift(pagePath(path)); },
+    aboutMe: (visibility) => {
+      if (visibility !== 'owner' && visibility !== 'team' && visibility !== 'external') throw new Error('Pick who sees the reply: owner, team or external.');
+      return service().briefKnowledge(visibility).aboutMe;
+    },
+    untagged: () => service().untaggedDetails(),
+    share: (paths, audience) => {
+      if (!Array.isArray(paths) || paths.some((item) => typeof item?.path !== 'string' || typeof item?.text !== 'string')) throw new Error('Pick the pages to share.');
+      const items = paths as { path: string; text: string }[];
+      return service().shareWith(items.map(({ path }) => path), audience, { roots: roots(), seen: Object.fromEntries(items.map(({ path, text }) => [path, text])) });
     },
   };
 };

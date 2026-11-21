@@ -4,7 +4,7 @@
 // written to knowledge/proposals/, and the main process tells this screen as soon as a file lands.
 import { useCallback, useEffect, useId, useState, type ReactNode } from 'react';
 import { ChevronRight, FileText, Folder, LoaderCircle, MessagesSquare } from 'lucide-react';
-import type { Proposal, ProposalDiff } from '../../../src/contracts.ts';
+import type { Proposal, ProposalDiff, ProposalSource } from '../../../src/contracts.ts';
 import type { ProposalTargets } from '../../../src/proposals.ts';
 import type { UndoHandle } from '../../main/bridge.ts';
 import type { InterviewPreview } from '../../../src/tasks.ts';
@@ -12,10 +12,15 @@ import { serra } from '../bridge.ts';
 import { REFRESH_COUNTS } from '../shell/events.ts';
 import { Button, cx, Dialog, Page, useToast } from '../ui/index.ts';
 import { DiffView } from './proposals/DiffView.tsx';
+import { AudienceChoice } from './AudienceChoice.tsx';
+import { alignHeader, frontmatter, removeHeaderField, setHeaderField } from '../../../src/knowledge-rules.ts';
+import { localDate } from './pages.logic.ts';
+import { approvalAudience, pageAudience, type Audience } from '../../../src/owner-model.ts';
 import { useSearchParams } from 'react-router';
 import { registerActions } from '../commands/registry.ts';
 import {
-  defaultFolder, folderChoices, folderLabel, groupByDate, interviewStartedText, nextSelection, pendingLabel, PROPOSAL_PARAM, promoteProposalAction, proposalTitle,
+  defaultFolder, folderChoices, folderLabel, groupByDate, interviewStartedText, nextSelection, pendingLabel, PROPOSAL_PARAM, promoteProposalAction, proposalBody,
+  proposalTitle, withoutTarget, diffRows, diffStats,
 } from './proposals.logic.ts';
 
 const unregister = registerActions([promoteProposalAction]);
@@ -97,6 +102,18 @@ export const Proposals = () => {
   const [busy, setBusy] = useState(false);
   const [mergeOpen, setMergeOpen] = useState(false);
   const [mergeTarget, setMergeTarget] = useState('');
+  /** The owner's own pick, or null to take the default for wherever the page lands. Only a pick is sent. */
+  const [picked, setPicked] = useState<Audience | null>(null);
+  /** The page as it will read after the merge, which the owner edits in the dialog. Null while it loads. */
+  const [mergeText, setMergeText] = useState<string | null>(null);
+  /** The page as the merge dialog loaded it: what the owner reviewed, so a change while the dialog is open refuses the merge. */
+  const [mergeBase, setMergeBase] = useState<string | null>(null);
+  /** The text the merge dialog started from when it put the proposal under another page: merging it unchanged would keep both. */
+  const [mergeStart, setMergeStart] = useState<string | null>(null);
+  /** Who may hear the merged page: the destination's own audience until the owner changes it. */
+  const [mergeAudience, setMergeAudience] = useState<Audience>('owner');
+  /** Bumped to reread the selected proposal's diff, after an approval found its page had changed. */
+  const [diffVersion, setDiffVersion] = useState(0);
 
   const reload = useCallback(async (select?: string | null) => {
     const bridge = serra();
@@ -149,10 +166,36 @@ export const Proposals = () => {
       (error) => { if (live) setDiffError(message(error)); },
     );
     return () => { live = false; };
-  }, [selected]);
+  }, [selected, diffVersion]);
+
+  // The merge dialog starts from the proposal when it is the whole page for the chosen page, and otherwise from the
+  // page as it is now with the proposal's text below it, for the owner to edit into one page.
+  useEffect(() => {
+    const bridge = serra();
+    setMergeText(null);
+    setMergeBase(null);
+    setMergeStart(null);
+    if (!mergeOpen || !bridge || !diff || !mergeTarget) return;
+    if (diff.proposal.target === mergeTarget && diff.current !== null) {
+      setMergeBase(diff.current); setMergeText(withoutTarget(diff.proposed)); setMergeAudience(approvalAudience(diff.proposed, diff.current).audience);
+      return;
+    }
+    let live = true;
+    bridge.pages.read(mergeTarget).then(
+      (current) => {
+        if (!live) return;
+        const start = `${current.trimEnd()}\n\n${proposalBody(diff.proposed)}\n`;
+        setMergeBase(current); setMergeText(start); setMergeStart(start); setMergeAudience(approvalAudience(diff.proposed, current).audience);
+      },
+      (error) => { if (live) { setMergeOpen(false); toast({ message: message(error), tone: 'error' }); } },
+    );
+    return () => { live = false; };
+  }, [mergeOpen, mergeTarget, diff, toast]);
 
   useEffect(() => {
     if (!diff) return;
+    // The default follows where the page lands (approvalAudience); only the owner's own pick is sent.
+    setPicked(null);
     setFolder(defaultFolder(diff.proposal, targets.folders) ?? '');
     setMergeTarget(diff.proposal.target ?? targets.pages[0] ?? '');
   }, [diff, targets]);
@@ -181,6 +224,8 @@ export const Proposals = () => {
       });
     } catch (error) {
       toast({ message: message(error), tone: 'error' });
+      // An approval refused because the page changed shows the refreshed diff to look at again.
+      setDiffVersion((version) => version + 1);
     } finally {
       setBusy(false);
     }
@@ -194,7 +239,7 @@ export const Proposals = () => {
     <Page
       title="Proposals"
       subtitle={proposals ? pendingLabel(proposals.length) : loadError ? undefined : 'Loading…'}
-      actions={<InterviewButton />}
+      actions={<InterviewButton autoOpen={search.get('interview') === '1'} onOpened={() => setSearch((params) => { params.delete('interview'); return params; }, { replace: true })} />}
     >
       {loadError && <p role="alert" className="text-sm text-down">{loadError}</p>}
       {proposals && proposals.length === 0 && (
@@ -215,8 +260,9 @@ export const Proposals = () => {
                   <h2 className="text-lg font-semibold tracking-tight">{title}</h2>
                   {diff.proposal.description && <p className="text-sm text-muted">{diff.proposal.description}</p>}
                   {diff.proposal.target && <p className="text-xs text-muted">Changes <code>{diff.proposal.target}</code></p>}
+                  <Sources text={diff.proposed} from={diff.proposal.from} />
                 </div>
-                <DiffView current={diff.current} proposed={diff.proposed} />
+                <DiffView current={landing(diff, folder)} proposed={asWritten(diff, folder, picked)} />
                 {folders.length > 0 ? (
                   <Select
                     label="Target folder"
@@ -228,13 +274,20 @@ export const Proposals = () => {
                 ) : (
                   <p className="text-sm text-muted">knowledge/ has no folders yet. Create one to promote into.</p>
                 )}
+                <div className="flex flex-col gap-1">
+                  <AudienceChoice id="proposal-audience" value={picked ?? approvalAudience(diff.proposed, landing(diff, folder)).audience} disabled={busy} onChange={setPicked} />
+                  {picked === null && asks(diff, folder) && <span className="text-xs text-muted">{asks(diff, folder)}</span>}
+                </div>
                 <div className="flex flex-wrap gap-2">
                   <Button
                     variant="primary"
                     disabled={busy || !folder}
-                    onClick={() => void act((path) => bridge.proposals.promote(path, folder), `Promoted ${title} to ${folderLabel(folder)}.`)}
+                    onClick={() => void act(
+                      (path) => bridge.proposals.promote(path, folder, { proposal: diff.proposed, path: diff.proposal.target, page: diff.current }, picked ?? undefined),
+                      replaces(diff, folder) ? `Replaced ${diff.proposal.target}.` : `Promoted ${title} to ${folderLabel(folder)}.`,
+                    )}
                   >
-                    Promote
+                    {replaces(diff, folder) ? 'Replace page' : 'Add page'}
                   </Button>
                   <Button disabled={busy || targets.pages.length === 0} onClick={() => setMergeOpen(true)}>Merge into…</Button>
                   <Button disabled={busy} onClick={() => void act((path) => bridge.proposals.discard(path), `Discarded ${title}.`)}>Discard</Button>
@@ -248,17 +301,19 @@ export const Proposals = () => {
         open={mergeOpen}
         onClose={() => setMergeOpen(false)}
         title="Merge into an existing page"
-        description="The proposal's text is added to the end of the page and its sources are kept. The page is marked verified today."
+        description="Edit the page as it should read. This text replaces the page, so remove any rule it replaces. Sources are kept and the page is marked verified today."
         actions={(
           <>
             <Button onClick={() => setMergeOpen(false)}>Cancel</Button>
             <Button
               variant="primary"
-              disabled={busy || !mergeTarget}
+              disabled={busy || !mergeTarget || mergeText === null || mergeBase === null || (mergeStart !== null && mergeText === mergeStart)}
               onClick={() => {
                 setMergeOpen(false);
                 const into = mergeTarget;
-                void act((path) => bridge!.proposals.mergeInto(path, into), `Merged ${title} into ${into}.`);
+                const text = mergeText ?? undefined;
+                const reviewed = { proposal: diff!.proposed, path: into, page: mergeBase };
+                void act((path) => bridge!.proposals.mergeInto(path, into, text, reviewed, mergeAudience), `Merged ${title} into ${into}.`);
               }}
             >
               Merge
@@ -267,15 +322,111 @@ export const Proposals = () => {
         )}
       >
         <Select label="Page" value={mergeTarget} onChange={setMergeTarget} options={targets.pages.map((value) => ({ value, label: value }))} />
+        <label className="mt-3 flex flex-col gap-1.5 text-sm">
+          <span className="font-medium">Page after the merge</span>
+          {mergeStart !== null && <span className="text-xs text-muted">The proposal is below the page. Edit them into one page, removing any rule it replaces, before merging.</span>}
+          {mergeBase !== null && mergeText !== null && <MergeStats before={mergeBase} after={mergeText} />}
+          <textarea
+            value={mergeText ?? ''}
+            onChange={(event) => setMergeText(event.target.value)}
+            disabled={mergeText === null}
+            spellCheck={false}
+            rows={14}
+            aria-label="Page after the merge"
+            className="w-full resize-y rounded-md border border-line bg-panel p-2 font-mono text-xs leading-5 text-ink focus:outline-2 focus:outline-offset-1 focus:outline-focus disabled:opacity-60"
+          />
+        </label>
+        <div className="mt-3 flex flex-col gap-1">
+          <AudienceChoice id="merge-audience" value={mergeAudience} disabled={mergeBase === null} onChange={setMergeAudience} />
+          {mergeBase !== null && widens(pageAudience(frontmatter(mergeBase)), mergeAudience) && (
+            <span className="text-xs text-warn">This shares {mergeTarget}&rsquo;s existing text more widely than now.</span>
+          )}
+        </div>
       </Dialog>
     </Page>
+  );
+};
+
+const AUDIENCE_RANK: Record<Audience, number> = { owner: 0, team: 1, external: 2 };
+/** Whether `to` lets more people hear a page than `from`. */
+const widens = (from: Audience, to: Audience): boolean => AUDIENCE_RANK[to] > AUDIENCE_RANK[from];
+
+/** The page approving into `folder` writes over: the proposal's target when it lands there, else none (a new page). */
+const landing = (diff: ProposalDiff, folder: string): string | null => (replaces(diff, folder) ? diff.current : null);
+
+/** The proposal's `sources:` lines: who and which thread the worker says it learned this from. */
+const sourcesOf = (text: string): string[] => {
+  const header = /^---\n([\s\S]*?)\n---\n/.exec(text)?.[1] ?? '';
+  const lines = header.split('\n');
+  const start = lines.findIndex((line) => line.startsWith('sources:'));
+  if (start === -1) return [];
+  const items: string[] = [];
+  for (const line of lines.slice(start + 1)) {
+    const item = /^\s+-\s+(.+)$/.exec(line);
+    if (!item) break;
+    items.push(item[1]!.trim());
+  }
+  return items;
+};
+
+const Sources = ({ text, from }: { text: string; from?: ProposalSource }) => {
+  const sources = sourcesOf(text);
+  const opened = (href: string) => (event: { preventDefault: () => void }) => { event.preventDefault(); void serra()?.app.openExternal(href); };
+  return (
+    <div className="flex flex-col gap-0.5 text-xs">
+      {from ? (
+        <p className={from.owner ? 'text-muted' : 'text-warn'}>
+          {from.owner
+            ? (from.via === 'app' ? 'From a task you started in the app.' : 'From a Slack thread you started.')
+            : `From a Slack thread ${from.who} started. Approve only what you said yourself.`}
+          {from.link && <>{' '}<a href={from.link} onClick={opened(from.link)} className="text-ink underline underline-offset-2 hover:no-underline focus-visible:outline-2 focus-visible:outline-focus">Open the thread</a></>}
+        </p>
+      ) : (
+        <p className="text-muted">Serra didn&rsquo;t record which thread wrote this (the interview and older briefs write here directly).</p>
+      )}
+      <p className="text-muted">{sources.length ? <>The worker&rsquo;s sources: {sources.join('; ')}.</> : 'The worker gave no sources.'}</p>
+    </div>
+  );
+};
+
+/** What the proposal asks for, when it differs from the default for where the page lands. */
+const asks = (diff: ProposalDiff, folder: string): string | null => {
+  const current = landing(diff, folder);
+  const { asks: direction } = approvalAudience(diff.proposed, current);
+  if (direction === 'narrower') return 'This proposal asks to share the page less. That\u2019s the default.';
+  if (direction === 'wider') return current === null
+    ? 'This proposal asks to share the page with people outside your company. It starts with your team unless you choose.'
+    : 'This proposal asks to share the page more widely. It stays as it is unless you choose.';
+  return null;
+};
+
+/** The page as approving into `folder` writes it: no `target:`, verified today, and the audience it will have. */
+const asWritten = (diff: ProposalDiff, folder: string, picked: Audience | null): string => {
+  const page = setHeaderField(withoutTarget(diff.proposed), 'verified', localDate(new Date()));
+  const current = landing(diff, folder);
+  const { audience, untagged } = approvalAudience(diff.proposed, current);
+  return alignHeader(picked ? setHeaderField(page, 'audience', picked) : untagged ? removeHeaderField(page, 'audience') : setHeaderField(page, 'audience', audience), current);
+};
+
+/** Whether approving into `folder` replaces the page the proposal names, rather than adding a new one. */
+const replaces = (diff: ProposalDiff, folder: string): boolean =>
+  diff.current !== null && diff.proposal.target !== null && diff.proposal.target.split('/').slice(0, -1).join('/') === folder;
+
+/** How the merged page differs from the page now, and a warning when nothing of the old page goes. */
+const MergeStats = ({ before, after }: { before: string; after: string }) => {
+  const stats = diffStats(diffRows(before, after));
+  return (
+    <span className={cx('text-xs', stats.removed === 0 ? 'text-warn' : 'text-muted')}>
+      {stats.removed} line{stats.removed === 1 ? '' : 's'} removed, {stats.added} added.
+      {stats.removed === 0 && ' Nothing of the page goes: check that no rule it replaces is left beside the new one.'}
+    </span>
   );
 };
 
 type Interview = { state: 'closed' } | { state: 'loading' } | { state: 'ready'; preview: InterviewPreview } | { state: 'error'; message: string };
 
 /** The header's Start interview button and its confirm dialog, which shows the brief the thread will get. */
-const InterviewButton = () => {
+const InterviewButton = ({ autoOpen = false, onOpened }: { autoOpen?: boolean; onOpened?: () => void }) => {
   const toast = useToast();
   const [dialog, setDialog] = useState<Interview>({ state: 'closed' });
   const [starting, setStarting] = useState(false);
@@ -290,7 +441,13 @@ const InterviewButton = () => {
       (preview) => setDialog({ state: 'ready', preview }),
       (error: unknown) => setDialog({ state: 'error', message: message(error) }),
     );
-  };
+  };  // Arriving from About me's "Start the interview" opens the confirm dialog straight away, once.
+  useEffect(() => {
+    if (!autoOpen) return;
+    onOpened?.();
+    open();
+  }, [autoOpen]); // eslint-disable-line react-hooks/exhaustive-deps
+
 
   const start = (): void => {
     const bridge = serra();

@@ -11,9 +11,13 @@ export interface BadgeSources {
   /** Null when the list isn't loaded or failed to load. */
   jobs: readonly JobSummary[] | null;
   proposals: readonly Proposal[] | null;
+  /** Pages that don't say who may hear them, so teammates' briefs leave them out (About me's badge). */
+  untagged?: readonly unknown[] | null;
+  /** Files changed outside Serra, waiting for the owner in Pages (its badge). */
+  drift?: readonly unknown[] | null;
 }
 
-export const badgeCounts = ({ status, jobs, proposals }: BadgeSources): BadgeCounts => {
+export const badgeCounts = ({ status, jobs, proposals, untagged, drift }: BadgeSources): BadgeCounts => {
   const counts: BadgeCounts = {};
   if (status?.state === 'up') {
     counts.needsYou = status.counts.needsYou;
@@ -23,6 +27,8 @@ export const badgeCounts = ({ status, jobs, proposals }: BadgeSources): BadgeCou
     counts.needsYou = jobs.filter((job) => job.group === 'needs you').length;
   }
   if (proposals) counts.proposals = proposals.length;
+  if (untagged) counts.untagged = untagged.length;
+  if (drift) counts.drift = drift.length;
   return counts;
 };
 
@@ -33,4 +39,4 @@ export const badgeText = (count: number | undefined): string | null => {
 };
 
 /** Which badge colour: what needs the owner stands out. */
-export const badgeTone = (key: BadgeKey): 'warn' | 'accent' => (key === 'needsYou' ? 'warn' : 'accent');
+export const badgeTone = (key: BadgeKey): 'warn' | 'accent' => (key === 'needsYou' || key === 'drift' ? 'warn' : 'accent');

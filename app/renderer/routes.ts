@@ -6,7 +6,7 @@
 export type SidebarSection = 'jobs' | 'knowledge' | 'brief' | 'settings';
 
 /** The live counts a sidebar item can show (see badges.logic.ts). */
-export type BadgeKey = 'needsYou' | 'running' | 'proposals';
+export type BadgeKey = 'needsYou' | 'running' | 'proposals' | 'untagged' | 'drift';
 
 export interface Route {
   id: string;
@@ -28,8 +28,9 @@ export const routes = [
   { id: 'jobs-running', path: '/jobs/running', label: 'Running', section: 'jobs', badge: 'running', nav: false, ticket: 'APP-12' },
   { id: 'jobs-done', path: '/jobs/done', label: 'Done today', section: 'jobs', nav: false, ticket: 'APP-12' },
   { id: 'new-task', path: '/jobs/new', label: 'New task', section: 'jobs', nav: false, ticket: 'APP-25' },
+  { id: 'about-me', path: '/knowledge/about', label: 'About me', section: 'knowledge', badge: 'untagged', ticket: 'SERRA-41' },
   { id: 'proposals', path: '/knowledge/proposals', label: 'Proposals', section: 'knowledge', badge: 'proposals', ticket: 'APP-13' },
-  { id: 'pages', path: '/knowledge/pages', label: 'Pages', section: 'knowledge', ticket: 'APP-20' },
+  { id: 'pages', path: '/knowledge/pages', label: 'Pages', section: 'knowledge', badge: 'drift', ticket: 'APP-20' },
   { id: 'brief', path: '/brief', label: 'Brief & policy', section: 'brief', ticket: 'APP-21' },
   { id: 'settings-bot', path: '/settings/bot', label: 'Bot & Slack', section: 'settings', ticket: 'APP-14' },
   { id: 'settings-people', path: '/settings/people', label: 'People', section: 'settings', ticket: 'APP-14' },

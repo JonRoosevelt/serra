@@ -62,6 +62,17 @@ export interface Job {
   progress?: { ts: string; runId: string; text: string };
   /** The run the bot last saw running, and when it first saw it: how long a run has been going. */
   runSeen?: { runId: string; at: string };
+  /** Who sees this thread's replies, as its brief was built for. Absent on jobs from before audiences. */
+  visibility?: 'owner' | 'team' | 'external';
+  /**
+   * Knowledge pages the thread's worker could read, each with who could hear the version it read. A reply only goes
+   * where every one of them may be heard; after one is taken back, a follow-up starts a fresh T3 thread.
+   */
+  knowledgeRead?: Record<string, 'owner' | 'team' | 'external'>;
+  /** The snapshot folder the thread's worker reads pages from. When it's gone, the next turn starts a fresh thread. */
+  knowledgeDir?: string;
+  /** The task branch the thread works on, so a fresh thread can carry on from its committed work. */
+  branch?: string;
 }
 
 export interface StartThreadInput {

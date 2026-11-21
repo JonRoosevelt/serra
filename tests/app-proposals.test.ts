@@ -8,7 +8,8 @@ import type { HandlerContext } from '../app/main/ipc/context.ts';
 import { memoryPrefs } from '../app/main/prefs.ts';
 import { stoppedStatusSource } from '../app/main/status.ts';
 import {
-  dateLabel, defaultFolder, diffRows, diffStats, folderLabel, folderOf, groupByDate, nextSelection, pendingLabel, proposalTitle,
+  dateLabel, defaultFolder, diffRows, diffStats, folderLabel, folderOf, groupByDate, nextSelection, pendingLabel, proposalBody, proposalTitle,
+  withoutTarget,
 } from '../app/renderer/screens/proposals.logic.ts';
 import type { Proposal } from '../src/contracts.ts';
 
@@ -160,10 +161,16 @@ test('handlers: list, diff and the folder and page pickers come from the profile
   assert.deepEqual(await handlers.targets(), { folders: ['owner', 'runbooks'], pages: ['owner/role.md'] });
 });
 
+/** What the screen shows before an approval, as the handlers get it back. */
+const shown = async (handlers: { diff: (path: string) => unknown }, path: string) => {
+  const { proposed, current, proposal } = await handlers.diff(path) as { proposed: string; current: string | null; proposal: { target: string | null } };
+  return { proposal: proposed, path: proposal.target, page: current };
+};
+
 test('handlers: promoting then undoing restores every file', async (t) => {
   const { handlers, snapshot } = profile(t);
   const before = snapshot();
-  const { undoId } = await handlers.promote('2026-11-16-deploys.md', 'runbooks');
+  const { undoId } = await handlers.promote('2026-11-16-deploys.md', 'runbooks', await shown(handlers, '2026-11-16-deploys.md'));
   const after = snapshot();
   assert.equal(after['proposals/2026-11-16-deploys.md'], null);
   assert.match(after['runbooks/deploys.md'] ?? '', /Deploys go out on Tuesdays\./);
@@ -176,8 +183,9 @@ test('handlers: promoting then undoing restores every file', async (t) => {
 
 test('handlers: promote without a folder uses the target page folder, or asks for one', async (t) => {
   const { handlers, snapshot } = profile(t);
-  await assert.rejects(async () => handlers.promote('2026-11-16-deploys.md'), /Pick a folder/);
-  await handlers.promote('2026-11-18-reviews.md');
+  await assert.rejects(async () => handlers.promote('2026-11-16-deploys.md', undefined, await shown(handlers, '2026-11-16-deploys.md')), /Pick a folder/);
+  await assert.rejects(async () => handlers.promote('2026-11-18-reviews.md', undefined, undefined as never), /Review the proposal/);
+  await handlers.promote('2026-11-18-reviews.md', undefined, await shown(handlers, '2026-11-18-reviews.md'));
   // The proposal names owner/role.md, so it replaces that page instead of landing beside it.
   assert.match(snapshot()['owner/role.md'] ?? '', /Also reviews every PR\./);
   assert.equal(snapshot()['owner/reviews.md'], null);
@@ -186,14 +194,20 @@ test('handlers: promote without a folder uses the target page folder, or asks fo
 test('handlers: merge and discard can be undone too, and bad input is refused', async (t) => {
   const { handlers, snapshot } = profile(t);
   const before = snapshot();
-  const merged = await handlers.mergeInto('2026-11-18-reviews.md', 'owner/role.md');
-  assert.match(snapshot()['owner/role.md'] ?? '', /Owns the API\.[\s\S]*Also reviews every PR\./);
+  const merged = await handlers.mergeInto('2026-11-18-reviews.md', 'owner/role.md', undefined, await shown(handlers, '2026-11-18-reviews.md'));
+  assert.match(snapshot()['owner/role.md'] ?? '', /Also reviews every PR\./);
   const discarded = await handlers.discard('2026-11-16-deploys.md');
   assert.deepEqual(await handlers.list(), []);
   await handlers.undo(discarded.undoId);
   await handlers.undo(merged.undoId);
   assert.deepEqual(snapshot(), before);
-  await assert.rejects(async () => handlers.mergeInto('2026-11-18-reviews.md', ''), /Page to merge into is missing/);
-  await assert.rejects(async () => handlers.promote('2026-11-16-deploys.md', '../outside'), /inside knowledge/);
+  await assert.rejects(async () => handlers.mergeInto('2026-11-18-reviews.md', '', undefined, await shown(handlers, '2026-11-18-reviews.md')), /Page to merge into is missing/);
+  await assert.rejects(async () => handlers.promote('2026-11-16-deploys.md', '../outside', await shown(handlers, '2026-11-16-deploys.md')), /inside knowledge/);
   await assert.rejects(async () => handlers.diff(42 as unknown as string), /Proposal is missing/);
+});
+
+test('the merge dialog starts from the proposal as a page, or from its text under the current page', () => {
+  const proposal = '---\ntype: preference\ndescription: Releases\ntarget: owner/role.md\nverified: no\n---\n# Robin\n\n- Ship on Tuesday.\n';
+  assert.equal(withoutTarget(proposal), '---\ntype: preference\ndescription: Releases\nverified: no\n---\n# Robin\n\n- Ship on Tuesday.\n');
+  assert.equal(proposalBody(proposal), '# Robin\n\n- Ship on Tuesday.');
 });
