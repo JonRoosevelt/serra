@@ -1,6 +1,6 @@
 // The window's shell and router: the sidebar, a route per screen, last-screen memory and toasts.
 // Each screen lives in its own file under screens/.
-import { useEffect, useRef, type ReactElement } from 'react';
+import { useEffect, useLayoutEffect, useRef, type ReactElement } from 'react';
 import { HashRouter, Navigate, Route, Routes, useLocation } from 'react-router';
 import { serra } from './bridge.ts';
 import { CommandPalette } from './commands/Palette.tsx';
@@ -24,6 +24,7 @@ import { Welcome } from './screens/Welcome/Welcome.tsx';
 import { WELCOME_PATH } from './screens/Welcome/welcome.logic.ts';
 import { useBadgeCounts, useBotStatus } from './shell/live.ts';
 import { FollowNavigation } from './shell/navigate.ts';
+import { focusScreen, Shortcuts } from './shell/Shortcuts.tsx';
 import { Sidebar } from './shell/Sidebar.tsx';
 import { ToastProvider } from './ui/index.ts';
 
@@ -61,23 +62,44 @@ const RememberScreen = () => {
   return null;
 };
 
+/** Every screen (and every Jobs tab) opens at its top, not at the last screen's scroll position. */
+const ScrollToTop = () => {
+  const { pathname } = useLocation();
+  useLayoutEffect(() => { document.querySelector('[data-serra-main]')?.scrollTo({ top: 0 }); }, [pathname]);
+  return null;
+};
+
 const Shell = () => {
+  const { pathname } = useLocation();
   const status = useBotStatus();
   const counts = useBadgeCounts(status);
   return (
     <div className="flex h-full">
+      <button
+        type="button"
+        onClick={(event) => focusScreen(pathname, event.currentTarget)}
+        className="fixed top-2 left-[252px] z-50 -translate-y-20 rounded-md bg-accent px-3 py-1.5 text-[13px] font-medium text-accent-ink focus:translate-y-0 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus"
+      >
+        Skip to content
+      </button>
       <Sidebar status={status} counts={counts} />
-      <main className="min-w-0 flex-1 overflow-y-auto" data-serra-main>
-        <Routes>
-          {routes.map((route) => <Route key={route.id} path={route.path} element={screens[route.id]} />)}
-          {/* The first-run wizard (APP-27) isn't a sidebar item: the window opens on it until a profile exists. */}
-          <Route path={WELCOME_PATH} element={<Welcome />} />
-          <Route path="*" element={<Navigate to={defaultPath} replace />} />
-        </Routes>
-      </main>
+      <div className="flex min-w-0 flex-1 flex-col bg-canvas">
+        {/* The title bar's height across the content side: it moves the window, and screens start below it. */}
+        <div className="drag h-10 shrink-0" aria-hidden />
+        <main className="min-h-0 flex-1 overflow-y-auto [scrollbar-gutter:stable]" data-serra-main data-path={pathname}>
+          <Routes>
+            {routes.map((route) => <Route key={route.id} path={route.path} element={screens[route.id]} />)}
+            {/* The first-run wizard (APP-27) isn't a sidebar item: the window opens on it until a profile exists. */}
+            <Route path={WELCOME_PATH} element={<Welcome />} />
+            <Route path="*" element={<Navigate to={defaultPath} replace />} />
+          </Routes>
+        </main>
+      </div>
       <RememberScreen />
       <CommandPalette />
       <FollowNavigation />
+      <Shortcuts />
+      <ScrollToTop />
     </div>
   );
 };
