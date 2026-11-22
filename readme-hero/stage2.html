@@ -1,0 +1,67 @@
+<!doctype html><html><head><meta charset="utf-8"><style>
+:root{--bg:#0b0b0c;--panel:#121214;--ink:#ededef;--muted:#a3a3ab;--line:#ffffff1a;--up:#22c55e;--link:#7cb8ff}
+*{box-sizing:border-box;margin:0}
+html,body{width:1080px;height:638px;overflow:hidden;background:#1a1a1c;font:14px/1.45 -apple-system,BlinkMacSystemFont,"SF Pro Text","Helvetica Neue",sans-serif;color:var(--ink);-webkit-font-smoothing:antialiased}
+.win{position:absolute;left:0;top:0;width:1080px;height:586px;border-radius:0;overflow:hidden;background:var(--bg)}
+.scene{position:absolute;inset:0;transition:none}
+.lights{position:absolute;top:23px;left:21px;display:flex;gap:9.5px;z-index:5}.lights i{width:14px;height:14px;border-radius:50%;background:#ff5f57}.lights i:nth-child(2){background:#febc2e}.lights i:nth-child(3){background:#28c840}
+iframe{border:0;width:calc(100% / 1.2);height:calc(100% / 1.2);display:block;transform:scale(1.2);transform-origin:0 0}
+/* chat */
+.chat{display:flex;height:100%;zoom:1.2;background:#1a1d21}
+.rail{width:200px;background:#141619;border-right:1px solid var(--line);padding:18px 12px 0}
+.rail .ws{font-weight:700;font-size:15px;margin:0 6px 14px}
+.rail p{padding:3px 8px;border-radius:6px;color:var(--muted);font-size:14px}.rail p.on{background:#ffffff14;color:var(--ink);font-weight:600}
+.main{flex:1;display:flex;flex-direction:column;min-width:0}
+.head{height:52px;border-bottom:1px solid var(--line);display:flex;align-items:center;padding:0 20px;font-weight:700;font-size:16px;gap:6px}
+.head span{color:var(--muted);font-weight:400}
+.msgs{flex:1;padding:18px 20px;display:flex;flex-direction:column;justify-content:flex-end;gap:16px;overflow:hidden}
+.m{display:flex;gap:10px}.av{width:36px;height:36px;border-radius:8px;flex:none;display:grid;place-items:center;font-weight:700;color:#fff}
+.av img{width:36px;height:36px;border-radius:8px}
+.n{font-weight:700}.n small{color:var(--muted);font-weight:400;font-size:12px;margin-left:6px}.app{font-size:10px;font-weight:700;background:#ffffff1f;color:var(--muted);padding:1px 4px;border-radius:3px;margin-left:5px;vertical-align:1px}
+.at{color:#e8f2ff;background:#1d9bd133;border-radius:3px;padding:0 2px}
+.rx{display:inline-flex;gap:5px;align-items:center;margin-top:6px;border:1px solid #1d9bd1;background:#1d9bd126;border-radius:12px;padding:1px 8px;font-size:13px}
+.thread{margin-top:6px;font-size:13px;color:var(--link);font-weight:600}
+.reply{margin:4px 0 0 46px;border-left:2px solid var(--line);padding-left:14px}
+.lk{color:var(--link)}.ctx{margin-top:6px;font-size:12px;color:var(--muted)}.ctx .lk{color:var(--muted);text-decoration:underline}
+.card{margin-top:8px;border:1px solid var(--line);border-left:4px solid var(--up);border-radius:6px;padding:8px 12px;background:#ffffff08;max-width:430px}
+.card b{display:block}.card div{color:var(--muted);font-size:13px}
+.compose{margin:0 20px 18px;border:1px solid #ffffff33;border-radius:8px;padding:11px 14px;min-height:44px;color:var(--ink)}
+.compose .ph{color:#ffffff59}.caret{display:inline-block;width:1.5px;height:17px;background:var(--ink);vertical-align:-3px;margin-left:1px}
+/* caption */
+.cap{position:absolute;left:50%;bottom:10px;transform:translateX(-50%);z-index:9;background:#0b0b0c;border:1px solid #ffffff1f;border-radius:999px;padding:7px 16px 7px 10px;font-size:14px;font-weight:600;display:flex;gap:9px;align-items:center;white-space:nowrap;}
+.cap b{width:22px;height:22px;border-radius:50%;background:var(--up);color:#0b0b0c;display:grid;place-items:center;font-size:12px}
+.hide{display:none!important}
+</style></head><body>
+<div class="win">
+  <div class="scene" id="chat"><div class="chat">
+    <div class="rail"><div class="ws">Acme</div><p># general</p><p># payments</p><p class="on"># web</p><p># api</p><p style="margin-top:12px">Friday <span class="app">APP</span></p></div>
+    <div class="main">
+      <div class="head"># web</div>
+      <div class="msgs">
+        <div class="m"><div class="av" style="background:#2f8f6b">P</div><div><div class="n">Priya <small>09:20</small></div><span class="at">@Friday</span> the invoices table is blank when a customer has none. Can you add an empty state?<div class="thread">3 replies</div></div></div>
+        <div class="reply">
+          <div class="m"><div class="av"><img src="serra-icon.png"></div><div><div class="n">Friday<span class="app">APP</span> <small>09:26</small></div>Added an empty state with a short line and a <b>Create invoice</b> button. Draft PR: <span class="lk">Invoices empty state #131</span><div class="ctx">cc <span class="at">@Alex</span> · <span class="lk">T3 thread</span></div></div></div>
+          <div class="m" style="margin-top:14px"><div class="av" style="background:#2f8f6b">P</div><div><div class="n">Priya <small>09:31</small></div>Nice. Can the button open the new-invoice drawer instead of a new page?</div></div>
+          <div class="m" style="margin-top:14px"><div class="av"><img src="serra-icon.png"></div><div><div class="n">Friday<span class="app">APP</span> <small>09:34</small></div>Done. It opens the drawer now; pushed to the same PR.<div class="ctx"><span class="lk">T3 thread</span></div></div></div>
+        </div>
+      </div>
+      <div class="compose" id="compose"><span class="ph">Message #web</span></div>
+    </div></div></div>
+  <div class="scene hide" id="appScene"><div class="lights"><i></i><i></i><i></i></div><iframe id="app" src="http://localhost:5173/#/jobs/running"></iframe></div>
+  </div>
+<div class="cap" id="cap"><b>1</b><span>Ask in Slack</span></div>
+<script>
+const TEXT='@Friday the webhook worker retries forever on a 410. Can you fix it?';
+const $=id=>document.getElementById(id);
+window.setStep=(s)=>{
+  const {typed=0,sent=false,eyes=false,app=false,reply=false,cap}=s;
+  $('chat').classList.toggle('hide',app); $('appScene').classList.toggle('hide',!app);
+  $('ask').classList.toggle('hide',!sent); $('eyes').classList.toggle('hide',!eyes||reply);
+  $('reply').classList.toggle('hide',!reply); $('tlink').classList.toggle('hide',!reply);
+  const t=TEXT.slice(0,typed);
+  $('compose').innerHTML = typed&&!sent ? t.replace('@Friday','<span class="at">@Friday</span>')+'<span class="caret"></span>' : '<span class="ph">Message #web</span>';
+  $('cap').innerHTML=`<b>${cap[0]}</b><span>${cap[1]}</span>`;
+};
+window.TEXTLEN=TEXT.length;
+</script></body></html>
+<style>body.still .cap{display:none}body.still{height:586px}</style>
