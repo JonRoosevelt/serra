@@ -151,6 +151,26 @@ check('lint: every suppression covers one line, names its rule and says why, aft
   assert.deepEqual(bad, [], 'write // oxlint-disable-next-line <rule> -- <why> (not eslint-disable, a bare disable or a whole-file one)');
 });
 
+check('imports: the core reaches Slack and the WorkerWriter by no dynamic import() or require() either', () => {
+  // .oxlintrc.json's import rules see static imports only. These files may load Slack (see the overrides there).
+  const boltOk = /^src\/(slack\/|daemon\.ts$|index\.ts$|setup\.ts$|doctor\.ts$|secrets\.ts$|slack-names\.ts$|logging\.ts$)/;
+  const adapterOk = /^src\/(slack\/|daemon\.ts$)/;
+  // Any dynamic import, a template or a variable included: only a literal can be checked, so the core may use none of
+  // the others to reach Slack.
+  const bad = code().filter((file) => file.startsWith('src/')).flatMap((file) => [...read(file).matchAll(/\bimport\(\s*(?:(['"`])([^'"`]+)\1|([^)'"`]+))/g)]
+    .filter(([, , literal, other]) => {
+      if (other !== undefined) return !boltOk.test(file);
+      const target = literal ?? '';
+      return (!boltOk.test(file) && /^@slack\//.test(target)) || (!adapterOk.test(file) && /(^|\/)slack\//.test(target))
+        || (!/^src\/(slack\/|chat\/deliver\.ts$)/.test(file) && /(^|\/)(chat\/)?writer(\.ts)?$/.test(target));
+    })
+    .map((match) => `${file}: ${match[2] ?? match[3] ?? ''}`));
+  assert.deepEqual(bad, []);
+  // `require` and `createRequire` reach any module without an import: the core uses neither.
+  const required = code().filter((file) => file.startsWith('src/') && /\b(createRequire|require)\s*\(/.test(read(file)));
+  assert.deepEqual(required, [], 'no require() in src/');
+});
+
 check('imports: a relative import names the .ts file, never a .js one', () => {
   // Node runs the TypeScript as is, so `./x.js` fails at run time although tsc and oxlint accept it.
   const bad = code().flatMap((file) => [...read(file).matchAll(/(?:from|import)\s*\(?\s*(['"])(\.{1,2}\/[^'"]+\.js)\1/g)].map((match) => `${file}: ${match[2]}`));
@@ -238,7 +258,7 @@ const exceptionsNow = (): Set<string> => {
 // A reviewed change to the gates (any change but removing exceptions): the fingerprint the check below prints for it.
 // It covers main's version and this one, so it only ever matches the change it was made for.
 // Changing this line is how a PR says "this changes what the gates enforce, on purpose"; the reviewer sees both.
-const ACKNOWLEDGED_GATE_CHANGE = '38b6b9baa6684b39';
+const ACKNOWLEDGED_GATE_CHANGE = '05571595774c0bb7';
 
 check('gates: unchanged against main, except exceptions removed (lint, knip, tsconfigs, scripts, gitleaks, CI)', () => {
   const commit = base();

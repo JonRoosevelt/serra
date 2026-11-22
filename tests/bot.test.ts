@@ -4,23 +4,24 @@ import { join } from 'node:path';
 import test, { type TestContext } from 'node:test';
 import { createBot, type BotDeps } from '../src/bot.ts';
 import type { MessageTrigger } from '../src/config.ts';
-import { incomingMessage } from '../src/incoming.ts';
+import { incomingMessage } from '../src/slack/incoming.ts';
 import { createStore } from '../src/state.ts';
 import { fakeClock } from './fakes/clock.ts';
 import { BOT, OWNER, SAM, testProfile } from './fakes/profile.ts';
 import { createFakeSlack } from './fakes/slack.ts';
 import { createFakeT3 } from './fakes/t3.ts';
-import { receiveAttachments } from '../src/attachments.ts';
+import { receiveAttachments } from '../src/slack/attachments.ts';
 import type { IncomingFile, IncomingMessage } from '../src/types.ts';
 import type { T3QuestionRequest } from '../src/t3-questions.ts';
-import { questionInteraction } from '../src/questions.ts';
+import { questionInteraction } from '../src/slack/questions.ts';
+import { slackChat } from './fakes/chat.ts';
 import { addAllowedUser, PROFILE_SETTINGS, updateProfileSection } from '../src/profile-settings.ts';
 import { watchProfile } from '../src/profile-reload.ts';
 import { listJobs } from '../src/jobs.ts';
 
 
 /** A bot wired to the shared recording Slack and scriptable T3 (tests/fakes), on a fake clock the test moves by hand. */
-const fixture = (t: TestContext, receive?: BotDeps['receive'], { allowErrors = false, failStart, statusError, failAnswer, ...profile }: { branchPattern?: string; allowErrors?: boolean; messageTriggers?: MessageTrigger[]; failStart?: () => boolean; statusError?: () => boolean; failAnswer?: () => boolean } = {}) => {
+const fixture = (t: TestContext, receive?: typeof receiveAttachments, { allowErrors = false, failStart, statusError, failAnswer, ...profile }: { branchPattern?: string; allowErrors?: boolean; messageTriggers?: MessageTrigger[]; failStart?: () => boolean; statusError?: () => boolean; failAnswer?: () => boolean } = {}) => {
   const { config } = testProfile(t, profile);
   const clock = fakeClock('2026-11-18T10:00:00Z');
   const slack = createFakeSlack({ botUserId: BOT, names: { [OWNER]: 'Alex Doe', [SAM]: 'Sam' }, now: () => clock.now() });
@@ -54,13 +55,13 @@ const fixture = (t: TestContext, receive?: BotDeps['receive'], { allowErrors = f
   };
   const quiet = (): void => {};
   const deps: BotDeps = {
-    config, client: slack.client, botUserId: () => BOT, store: createStore(config.statePath), loadIndex: () => 'index', t3,
+    config, store: createStore(config.statePath), loadIndex: () => 'index', t3,
     logger: { info: quiet, warn: quiet, error: (message) => { if (allowErrors || failStart || failAnswer) errors.push(message); else assert.fail(message); }, debug: quiet },
     questions: worker.questions,
-    fetchBase: async () => {}, share: async (_client, text) => text, reviewRequest: async (_client, text) => ({ reply: text, postedFor: null }),
-    receive: receive ?? ((client, files, profileDir, token, options) => receiveAttachments(client, files, profileDir, token, { ...options,
+    fetchBase: async () => {}, share: async (text) => text, reviewRequest: async (text) => ({ reply: text, postedFor: null }),
+    ...slackChat(slack.client, config, { botUserId: BOT, clock, receive: receive ?? ((client, files, profileDir, token, options) => receiveAttachments(client, files, profileDir, token, { ...options,
       fetchFile: async (url) => { downloads.push(String(url)); return new Response('fixture file bytes'); },
-    })),
+    })) }),
     timing: { quietMs: 15, retryMs: 5 },
     clock,
     events: (name, fields) => { recordedEvents.push({ name, fields }); },
@@ -898,8 +899,8 @@ test('only the owner or original requester can answer; forged and stale choices 
   await choose(f, 0, 'USTRANGER');
   assert.equal(f.answered.length, 0);
   const state = savedQuestion(f);
-  await f.bot.handleQuestionAction({ channel: 'COTHER', messageTs: state.ts, user: OWNER, nonce: state.nonce, actionId: 'serra_question_choice_0', indices: [0] });
-  await f.bot.handleQuestionAction({ channel: 'C1', messageTs: state.ts, user: OWNER, nonce: 'forged', actionId: 'serra_question_choice_0', indices: [0] });
+  await f.bot.handleQuestionAction({ channel: 'COTHER', messageTs: state.ts, user: OWNER, nonce: state.nonce, indices: [0] });
+  await f.bot.handleQuestionAction({ channel: 'C1', messageTs: state.ts, user: OWNER, nonce: 'forged', indices: [0] });
   assert.equal(f.answered.length, 0);
   await choose(f, 99, OWNER);
   assert.equal(f.answered.length, 0);
@@ -933,9 +934,11 @@ test('multi-select requires Submit and sends the saved option values together', 
   const request = nativeQuestion(); request.questions[0]!.multiSelect = true;
   f.questionRequests.push(request); f.waitsInT3(1); await f.bot.poll();
   const state = savedQuestion(f);
-  await f.bot.handleQuestionAction({ channel: 'C1', messageTs: state.ts, user: SAM, nonce: state.nonce, actionId: 'serra_question_multi', indices: [0, 1] });
+  // Changing the select isn't an answer: Slack's parser never hands it to the bot.
+  assert.equal(questionInteraction({ type: 'block_actions', channel: { id: 'C1' }, user: { id: SAM }, message: { ts: state.ts },
+    actions: [{ action_id: 'serra_question_multi', block_id: `sq:${state.nonce}:choices`, selected_options: [{ value: '0' }, { value: '1' }] }] }), null);
   assert.equal(f.answered.length, 0);
-  await f.bot.handleQuestionAction({ channel: 'C1', messageTs: state.ts, user: SAM, nonce: state.nonce, actionId: 'serra_question_submit', indices: [0, 1] });
+  await f.bot.handleQuestionAction({ channel: 'C1', messageTs: state.ts, user: SAM, nonce: state.nonce, indices: [0, 1] });
   assert.deepEqual(f.answered[0]!.answers, { scope: ['front', 'back'] });
 });
 
@@ -1286,4 +1289,58 @@ test('at start, a followed job whose run finished while the bot was stopped is p
   assert.equal(savedJob(f)[1].watching, true, 'a reply the bot was following is still owed');
   await bot.poll();
   assert.deepEqual(f.posts.map((post) => post.text), ['Scoring works like this.']);
+});
+
+// Each write of worker words is checked by `deliver` right before it goes out. These tests have no knowledge set up,
+// so the only lookups of who can see the thread are those last-moment checks.
+
+test('[REPLY-003] a progress line Slack can\'t clear at the moment of writing isn\'t shown, and the next poll tries again', async (t) => {
+  const f = fixture(t);
+  await f.say(SAM, `<@${BOT}> why does the leaderboard double count?`, true);
+  await f.bot.poll();
+  f.workerNotes('Reproducing the double count locally first.');
+  await f.advance(3 * 60_000);
+  f.slack.fail('conversations.info', new Error('ratelimited'), 2);
+  await f.bot.poll();
+  assert.equal(f.posts.length, 0, 'no worker words without the check');
+  await f.bot.poll();
+  assert.match(f.posts[0]!.text, /Still on it: Reproducing/);
+});
+
+test('[QUEST-001] a lookup blip before the next question card keeps the form: the answer is asked for again, nothing is lost', async (t) => {
+  const f = fixture(t);
+  await f.say(SAM, `<@${BOT}> investigate`, true);
+  const request = nativeQuestion();
+  request.questions.push({ id: 'details', header: 'Details', question: 'Anything else?', options: [] });
+  f.questionRequests.push(request); f.waitsInT3(1); await f.bot.poll();
+  const first = savedQuestion(f);
+  f.slack.fail('conversations.info', new Error('ratelimited'), 2);
+  await choose(f, 0);
+  assert.deepEqual(savedQuestion(f), first, 'the card and its answers are as they were');
+  assert.ok(f.posts.some((post) => /haven’t taken that answer/.test(post.text)));
+  assert.ok(!f.edits.some((edit) => /was closed/.test(edit.text)), 'not closed as if knowledge were taken back');
+  await choose(f, 0);
+  assert.equal(savedQuestion(f).index, 1, 'answering again moves on');
+});
+
+test('[REPLY-001] a reply Slack can\'t clear at the moment of writing becomes the "couldn\'t confirm" notice, posted once for its run', async (t) => {
+  const f = fixture(t);
+  await f.say(SAM, `<@${BOT}> rename the pricing page`, true);
+  f.slack.fail('conversations.info', new Error('ratelimited'), 2);
+  await f.workerReplies('Renamed it.');
+  assert.deepEqual(f.posts.map((post) => post.text), ['I couldn\'t confirm who can see this thread just now, so I haven\'t posted my answer here. Ask again in a minute and I\'ll try again.']);
+  assert.equal(f.eyes.size, 0, 'the 👀 goes with it');
+  await f.bot.poll();
+  assert.equal(f.posts.length, 1, 'the run counts as answered');
+});
+
+test('[QUEST-001] a lookup blip when the last answer is sent closes the card plainly, not as knowledge made private', async (t) => {
+  const f = fixture(t);
+  await f.say(SAM, `<@${BOT}> investigate`, true);
+  f.questionRequests.push(nativeQuestion()); f.waitsInT3(1); await f.bot.poll();
+  f.slack.fail('conversations.info', new Error('ratelimited'), 2);
+  await choose(f, 0);
+  assert.equal(f.answered.length, 1, 'the answer reached T3');
+  assert.equal(f.edits.at(-1)!.text, 'Answer sent. Continuing…');
+  assert.doesNotMatch(f.edits.at(-1)!.blocks, /Which|made private/);
 });

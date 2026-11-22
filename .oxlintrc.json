@@ -41,8 +41,63 @@
   },
   "overrides": [
     {
-      // Layer rule: the daemon, CLI and services never reach into the app or a UI library.
+      // Layer rules: the daemon, CLI and services never reach into the app or a UI library. The core never reaches Slack,
+      // only ChatPort; and only deliver writes the worker's words. (Each override below re-lists what it still forbids.)
       "files": ["src/**"],
+      "rules": {
+        "react/rules-of-hooks": "off",
+        "no-restricted-imports": ["error", { "patterns": [
+          { "regex": "(^|/)app/", "message": "src/ never imports from app/: the app calls src, not the reverse." },
+          { "regex": "^(electron|react|react-dom|react-router)($|/)", "message": "src/ runs in plain Node: no Electron or React." },
+          { "regex": "^@slack/", "message": "Slack lives in src/slack/. The core talks to a chat through ChatPort (src/chat/port.ts)." },
+          { "regex": "(^|/)slack/", "message": "Slack lives in src/slack/. The core talks to a chat through ChatPort (src/chat/port.ts); only the daemon wires the adapter in." },
+          { "regex": "(^|/)(chat/)?writer(\\.ts)?$", "message": "Only deliver (src/chat/deliver.ts) and the chat adapters hold a WorkerWriter: worker words go out through deliver." }
+        ] }]
+      }
+    },
+    {
+      // The daemon wires the Slack adapter in.
+      "files": ["src/daemon.ts"],
+      "rules": {
+        "react/rules-of-hooks": "off",
+        "no-restricted-imports": ["error", { "patterns": [
+          { "regex": "(^|/)app/", "message": "src/ never imports from app/: the app calls src, not the reverse." },
+          { "regex": "^(electron|react|react-dom|react-router)($|/)", "message": "src/ runs in plain Node: no Electron or React." },
+          { "regex": "(^|/)(chat/)?writer(\\.ts)?$", "message": "Only deliver (src/chat/deliver.ts) and the chat adapters hold a WorkerWriter: worker words go out through deliver." }
+        ] }]
+      }
+    },
+    {
+      // Setup, doctor, secrets, Slack names and the Bolt logger still call Slack's API themselves until the profile is
+      // per channel (architecture review, seam F). They use @slack/bolt, not the adapter.
+      // index.ts builds Bolt's app for the daemon.
+      "files": ["src/index.ts", "src/setup.ts", "src/doctor.ts", "src/secrets.ts", "src/slack-names.ts", "src/logging.ts"],
+      "rules": {
+        "react/rules-of-hooks": "off",
+        "no-restricted-imports": ["error", { "patterns": [
+          { "regex": "(^|/)app/", "message": "src/ never imports from app/: the app calls src, not the reverse." },
+          { "regex": "^(electron|react|react-dom|react-router)($|/)", "message": "src/ runs in plain Node: no Electron or React." },
+          { "regex": "(^|/)slack/", "message": "Slack lives in src/slack/. The core talks to a chat through ChatPort (src/chat/port.ts); only the daemon wires the adapter in." },
+          { "regex": "(^|/)(chat/)?writer(\\.ts)?$", "message": "Only deliver (src/chat/deliver.ts) and the chat adapters hold a WorkerWriter: worker words go out through deliver." }
+        ] }]
+      }
+    },
+    {
+      // deliver is the one holder of a WorkerWriter.
+      "files": ["src/chat/deliver.ts"],
+      "rules": {
+        "react/rules-of-hooks": "off",
+        "no-restricted-imports": ["error", { "patterns": [
+          { "regex": "(^|/)app/", "message": "src/ never imports from app/: the app calls src, not the reverse." },
+          { "regex": "^(electron|react|react-dom|react-router)($|/)", "message": "src/ runs in plain Node: no Electron or React." },
+          { "regex": "^@slack/", "message": "Slack lives in src/slack/. The core talks to a chat through ChatPort (src/chat/port.ts)." },
+          { "regex": "(^|/)slack/", "message": "Slack lives in src/slack/. The core talks to a chat through ChatPort (src/chat/port.ts); only the daemon wires the adapter in." }
+        ] }]
+      }
+    },
+    {
+      // A chat adapter: Slack's API, and the WorkerWriter it makes.
+      "files": ["src/slack/**"],
       "rules": {
         "react/rules-of-hooks": "off",
         "no-restricted-imports": ["error", { "patterns": [
@@ -71,7 +126,7 @@
       "files": ["app/main/**", "app/preload.ts"],
       "rules": {
         "react/rules-of-hooks": "off",
-        "no-restricted-imports": ["error", { "patterns": [{ "regex": "(^|/)renderer/", "allowTypeImports": true, "message": "app/main never imports renderer code." }] }]
+        "no-restricted-imports": ["error", { "patterns": [{ "regex": "(^|/)renderer/", "allowTypeImports": true, "message": "app/main never imports renderer code." }, { "regex": "(^|/)src/(slack/|chat/writer)", "message": "The app never reaches the chat adapter or the WorkerWriter: it talks to the daemon over the status socket." }] }]
       }
     },
     {
@@ -88,7 +143,7 @@
     },
     {
       "files": ["app/main/**/*.logic.ts"],
-      "rules": { "no-restricted-imports": ["error", { "patterns": [{ "regex": "(^|/)renderer/", "allowTypeImports": true, "message": "app/main never imports renderer code." }, { "regex": "^(node:|react|react-dom|react-router|electron)", "allowTypeImports": true, "message": "A .logic.ts file is pure: move this import to the screen or handler that calls it." }] }] }
+      "rules": { "no-restricted-imports": ["error", { "patterns": [{ "regex": "(^|/)renderer/", "allowTypeImports": true, "message": "app/main never imports renderer code." }, { "regex": "(^|/)src/(slack/|chat/writer)", "message": "The app never reaches the chat adapter or the WorkerWriter: it talks to the daemon over the status socket." }, { "regex": "^(node:|react|react-dom|react-router|electron)", "allowTypeImports": true, "message": "A .logic.ts file is pure: move this import to the screen or handler that calls it." }] }] }
     },
     {
       // Tests cast fakes on purpose (a recorded Slack client as WebClient); eval and release scripts read their own files.
@@ -108,11 +163,6 @@
       // New folders start strict: no `!` assertions either. Old code moves here as it is reworked.
       "files": ["src/lib/**", "src/chat/**", "src/slack/**"],
       "rules": { "typescript/no-non-null-assertion": "error" }
-    },
-    {
-      // TODO(SERRA-61): that branch rewrites str() here with field guards (isac/validate-file-socket-reads).
-      "files": ["src/status-socket.ts"],
-      "rules": { "typescript/no-base-to-string": "off" }
     },
     {
       // Casts that existed when the rule was turned on: mostly JSON and file reads, which move 7 replaces with guards.

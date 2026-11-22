@@ -8,10 +8,11 @@ import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 import type { App, Logger } from '@slack/bolt';
 import { createBot, type BotDeps } from './bot.ts';
+import { createDeliver } from './chat/deliver.ts';
 import { proposeBriefUpdate } from './brief.ts';
 import { systemClock, createTracker, type Clock } from './clock.ts';
 import { defaultProfileRoot, type Config } from './config.ts';
-import { incomingMessage } from './incoming.ts';
+import { incomingMessage } from './slack/incoming.ts';
 import { acknowledgePause, admit, dropHeld, holdRequest, markAttempt, readHeld, readPause } from './intake.ts';
 import type { createKnowledge } from './knowledge.ts';
 import { errorMessage } from './lib/errors.ts';
@@ -19,13 +20,15 @@ import { acquireLock } from './lock.ts';
 import { eventLog } from './logging.ts';
 import { watchProfile as watchProfileFile } from './profile-reload.ts';
 import { checkProjectAccess } from './project-access.ts';
-import { QUESTION_ACTION, questionInteraction } from './questions.ts';
 import { answerNameRequests, createSlackNames } from './slack-names.ts';
-import type { SlackApi } from './slack-api.ts';
+import type { SlackApi } from './slack/api.ts';
+import type { receiveAttachments } from './slack/attachments.ts';
+import { createSlackChat } from './slack/chat.ts';
+import { QUESTION_ACTION, questionInteraction } from './slack/questions.ts';
 import { createStore } from './state.ts';
 import { jobCounts, startStatusServer, type StatusServer } from './status-socket.ts';
 import type { IncomingMessage } from './types.ts';
-import { readAttachmentText } from './attachments.ts';
+import { readAttachmentText } from './slack/attachments.ts';
 import { createMeetingCapture, meetingsFirst, type MeetingCaptureDeps } from './meeting-capture.ts';
 import { createExtractor } from './meeting-extractor.ts';
 import { createSourceReader } from './meeting-sources.ts';
@@ -48,7 +51,9 @@ export interface DaemonDeps {
   clock?: Clock;
   connection?: ConnectionEvents;
   /** T3, questions, uploads and other bot seams. Production uses the real ones. */
-  bot?: Partial<Pick<BotDeps, 't3' | 'questions' | 'fetchBase' | 'share' | 'receive' | 'reviewRequest' | 'timing'>>;
+  bot?: Partial<Pick<BotDeps, 't3' | 'questions' | 'fetchBase' | 'share' | 'reviewRequest' | 'timing'>>;
+  /** Downloads the files people attach. Production uses the real one. */
+  receive?: typeof receiveAttachments;
   checkAccess?: (paths: string[]) => Promise<void>;
   /** Takes a lock file and returns its release. Two daemons never serve one profile or one Slack identity. */
   lock?: (path: string) => () => void;
@@ -102,9 +107,14 @@ export const startDaemon = async (deps: DaemonDeps): Promise<Daemon> => {
     const store = createStore(config.statePath, { warn: (message) => logger.warn(message), now: () => new Date(clock.now()) });
     const logEvent = eventLog(join(logsDir, 'events.jsonl'), () => new Date(clock.now()));
     let status: StatusServer | null = null;
+    // The Slack adapter. Its writer goes straight to `deliver`, the only code that ever holds it.
+    const { chat, writer, sawDm } = createSlackChat({
+      client, owner: config.owner, botUserId: () => botUserId, botToken: config.botToken, profileDir: config.profileDir, logger, clock,
+      ...(deps.receive ? { receive: deps.receive } : {}),
+    });
     const bot = createBot({
       ...deps.bot,
-      config, client, botUserId: () => botUserId, store, loadIndex, loadKnowledge: (visibility) => briefKnowledge(visibility), logger, clock,
+      config, chat, deliver: createDeliver(writer, briefKnowledge), store, loadIndex, loadKnowledge: (visibility) => briefKnowledge(visibility), logger, clock,
       // The app sees the same events as events.jsonl, live.
       events: (name, fields) => { logEvent(name, fields); status?.publish(name, fields); },
     });
@@ -122,6 +132,9 @@ export const startDaemon = async (deps: DaemonDeps): Promise<Daemon> => {
       }
     };
     const start = async (msg: IncomingMessage): Promise<void> => {
+      // Whose a DM is, for the adapter's check that the owner's DM is theirs alone: from every message handled, held
+      // requests replayed after a restart included.
+      if (!msg.botId) sawDm(msg.channel, msg.user);
       starting += 1;
       try { await track(bot.handle(msg)); } finally { starting -= 1; acknowledge(); }
     };
@@ -246,7 +259,9 @@ export const startDaemon = async (deps: DaemonDeps): Promise<Daemon> => {
       await ack();
       if (stopping) return;
       const interaction = questionInteraction(body);
-      if (interaction) await track(bot.handleQuestionAction(interaction));
+      if (!interaction) return;
+      sawDm(interaction.channel, interaction.user);
+      await track(bot.handleQuestionAction(interaction));
     });
     app.message(async ({ message }) => {
       if (stopping) return;
