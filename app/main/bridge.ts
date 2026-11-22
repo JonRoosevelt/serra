@@ -379,7 +379,7 @@ export const bridgeMethods = {
   tasks: methods<'tasks'>()(['preview', 'start', 'previewInterview', 'startInterview']),
 } satisfies { [N in Namespace]: readonly (keyof SerraApi[N])[] };
 
-export const pushChannels = ['status', 'event', 'releaseLog', 'appUpdate', 'navigate', 'proposals', 'jobs'] as const satisfies readonly (keyof SerraPushes)[];
+const pushChannels = ['status', 'event', 'releaseLog', 'appUpdate', 'navigate', 'proposals', 'jobs'] as const satisfies readonly (keyof SerraPushes)[];
 
 export const invokeChannel = (namespace: string, method: string): string => `serra:${namespace}.${method}`;
 export const pushChannel = (name: keyof SerraPushes): string => `serra:on.${name}`;
