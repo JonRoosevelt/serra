@@ -7,6 +7,7 @@ import type { MeetingSettings } from '../../../../src/meeting-settings.ts';
 import type { MeetingProviderView } from '../../../../src/meeting-runtime.ts';
 import type { MeetingProvider, ProviderStatus } from '../../../../src/meeting-sources.ts';
 import { providerBrand } from '../tools.logic.ts';
+import { providerLine } from './meetings.logic.ts';
 import type { MeetingView } from '../../../../src/meeting-store.ts';
 import { serra } from '../../bridge.ts';
 import { Badge, Button, Dialog, Page, useToast } from '../../ui/index.ts';
@@ -140,23 +141,22 @@ export const Meetings = () => {
           description="Meetings run on the provider your jobs use, through its own connections. Serra never holds their keys."
           actions={<Button size="sm" disabled={checking} icon={checking ? <LoaderCircle size={14} className="animate-spin" /> : <RefreshCw size={14} />} onClick={() => void check()}>Check</Button>}
         >
-          {view && (
-            <div className="flex items-start gap-3 rounded-md border border-line px-3 py-2.5">
-              <ToolIcon brand={providerBrand(view.provider?.icon ?? 'bot')} fallback={<Bot size={14} />} label={view.provider?.label ?? 'Provider'} />
-              <div className="flex min-w-0 flex-1 flex-col gap-0.5">
-                <div className="flex flex-wrap items-center gap-2">
-                  <span className="text-sm font-medium">Runs on {view.provider?.label ?? 'an unknown provider'}</span>
-                  <Badge tone={view.unsupported ? 'warn' : view.extraction?.ok ? 'up' : 'warn'}>{view.unsupported ? 'Not supported yet' : view.extraction?.ok ? 'Ready' : 'Not ready'}</Badge>
+          {view && (() => {
+            const line = providerLine(view);
+            return (
+              <div className="flex items-start gap-3 rounded-md border border-line px-3 py-2.5">
+                <ToolIcon brand={providerBrand(view.provider?.icon ?? 'bot')} fallback={<Bot size={14} />} label={view.provider?.label ?? 'Provider'} />
+                <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="text-sm font-medium">{line.title}</span>
+                    <Badge tone={line.badge.tone}>{line.badge.label}</Badge>
+                  </div>
+                  <p className="text-[13px] text-muted">{line.detail}</p>
                 </div>
-                <p className="text-[13px] text-muted">
-                  {view.unsupported ?? (view.extraction?.ok
-                    ? `${view.provider?.chosenBy === 't3-default' ? "T3's default provider" : 'Your worker provider'}, with no tools when it reads a transcript.`
-                    : view.extraction?.reason ?? '')}
-                </p>
               </div>
-            </div>
-          )}
-          {!view?.unsupported && <ul className="flex flex-col divide-y divide-line">
+            );
+          })()}
+          {view && providerLine(view).showSources && <ul className="flex flex-col divide-y divide-line">
             <SourceRow icon={<SourceIcon source="granola" />} label="Granola" how={PROVIDER_ROWS[0]!.how} status={statusOf('granola')} />
             <SourceRow icon={<SourceIcon source="google-meet" />} label="Google Meet" how={PROVIDER_ROWS[1]!.how} status={statusOf('google-meet')} />
             <SourceRow icon={<ToolIcon brand={null} fallback={<FileText size={14} />} label="File or text" />} label="File or pasted text" how="Attach a .txt, .md, .vtt or .srt export from any notetaker, or paste the summary." status={{ label: 'Ready', tone: 'up' }} />

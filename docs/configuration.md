@@ -52,7 +52,7 @@ Optional fields:
   "repositories": [
     { "name": "Service", "path": "/absolute/path/to/service", "baseRef": "origin/main", "githubRepo": "acme/service" }
   ],
-  "worker": { "provider": "claude", "model": "opus" },
+  "worker": { "provider": "claudeAgent", "model": "claude-opus-5-5" },
   "t3Bin": "/absolute/path/to/t3",
   "serviceLabel": "dev.serra.friday",
   "branchPattern": "{id}/{slug}-{stamp}",
@@ -64,7 +64,7 @@ Optional fields:
 
 `branchPattern` names the task branch each job's worktree starts on. Placeholders: `{id}` the bot ID, `{slug}` from the request, `{stamp}` a short unique suffix, `{DDMM}` and `{MMDD}` today's date. It must contain `{slug}` and `{stamp}` so two jobs never share a branch, and setup rejects patterns that can't make a valid Git branch. The default is `{id}/{slug}-{stamp}`. Example for a team that names branches after a placeholder ticket: `TEAM-{DDMM}/{slug}-{stamp}`. The worker can still rename the branch before its first push.
 
-`worker` chooses which T3 provider instance and model run the bot's jobs. `model` is required and `provider` is optional; T3 needs a model whenever a provider is given. Without `worker`, jobs use the T3 project's default model, which may differ from the one you pick when you work in T3 yourself. The names are the ones `t3 thread start --provider` and `--model` accept.
+`worker` chooses which T3 provider instance and model run the bot's jobs. `model` is required and `provider` is optional; T3 needs a model whenever a provider is given. Without `worker`, jobs use the T3 project's default model, which may differ from the one you pick when you work in T3 yourself. The names are the ones `t3 thread start --provider` and `--model` accept: a provider is a T3 instance id, such as `claudeAgent`, `codex` or one you added in T3, not a product name like `claude`. Serra resolves which provider jobs use the way T3 does (this setting, else the T3 project's default, else T3's global default) and never guesses from a name: an id T3 doesn't list shows as unknown in Tools and Settings › Meetings.
 
 Omit review to disable posting to a review channel. Review messages require an open, ready PR in the configured allowlist, authored by the configured GitHub account, with gh currently using that account. The daemon strips channel and group broadcasts from review messages. Worker instructions determine whether a PR should be made ready; the generic default is draft.
 
@@ -142,7 +142,7 @@ The worker gets MCP servers (Sentry, Datadog and the like) from its T3 provider,
 
 The app's **Tools** screen and `pnpm bot tools --profile /absolute/profile` are read-only. They show:
 
-- **MCP servers**, for the provider in `worker.provider`, or for both when it isn't set:
+- **MCP servers**, for every T3 provider Serra can read (Claude and Codex), the one your jobs use first. Every other T3 provider (Cursor, Antigravity and the rest) is listed under Other T3 providers as not supported yet, with no guess at its config. Missing-tool warnings are about the job provider only:
   - Listing runs the provider's own command, which does what the provider does when a job starts: `claude mcp list` connects to each server (starting local ones) to check its health, and `codex mcp list` loads Codex's own sign-in. Serra itself writes nothing. The provider CLIs run with your login shell's environment, as T3's jobs do, so a server that reads a token from it checks the same way. Serra reads that environment once and keeps it for five minutes; Check again reads it afresh.
   - Claude's come from `claude mcp list`, run in the project's checkout (or your home folder when the checkout is missing). That covers claude.ai connectors and plugin servers, with Claude's own health check (Connected, Needs sign-in, Failed, Needs approval).
   - Codex's come from `codex mcp list --json`, including servers Codex adds itself.

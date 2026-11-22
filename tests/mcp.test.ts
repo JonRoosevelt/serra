@@ -3,6 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import test, { type TestContext } from 'node:test';
+import { DatabaseSync } from 'node:sqlite';
 import type { Profile } from '../src/config.ts';
 import { formatMcpOverview, mcpOverview, parseCodexServers, requiredTools, workerProviders } from '../src/mcp.ts';
 
@@ -160,6 +161,11 @@ test('without a worker provider, jobs run on T3\'s default, and only its servers
   const f = fixture(t);
   f.write(join(f.home, '.claude.json'), { mcpServers: { sentry: sentryHttp } });
   f.write(join(f.home, '.t3', 'userdata', 'settings.json'), { defaultModelSelection: { instanceId: 'codex', model: 'gpt' } });
+  // T3's state says the project sets no default of its own, so T3 uses its global default.
+  const db = new DatabaseSync(join(f.home, '.t3', 'userdata', 'statev2.sqlite'));
+  db.exec('CREATE TABLE projection_projects (workspace_root TEXT, deleted_at TEXT, default_model_selection_json TEXT)');
+  db.prepare('INSERT INTO projection_projects VALUES (?, NULL, NULL)').run(f.project);
+  db.close();
   const overview = f.overview(f.profile({ worker: undefined }));
   assert.deepEqual(overview.worker.drivers, ['codex', 'claude'], "the job provider's kind first");
   const job = overview.providers.find((entry) => entry.jobs)!;
@@ -167,11 +173,11 @@ test('without a worker provider, jobs run on T3\'s default, and only its servers
   assert.deepEqual(overview.warnings.map((warning) => warning.driver), ['codex']);
 });
 
-test('without a worker provider or a T3 default, Serra says it can\'t tell instead of guessing', (t) => {
+test('without a worker provider, and no T3 project default Serra can read, it says it can\'t tell instead of guessing', (t) => {
   const f = fixture(t);
   const overview = f.overview(f.profile({ worker: undefined }));
   assert.equal(overview.providers.some((entry) => entry.jobs), false);
-  assert.match(overview.worker.note!, /can't tell which one jobs use/);
+  assert.match(overview.worker.note!, /can't tell which provider jobs use/);
   assert.deepEqual(overview.warnings, []);
 });
 

@@ -1,0 +1,7 @@
+{"type":"thread.started","thread_id":"00000000-0000-0000-0000-000000000000"}
+{"type":"turn.started"}
+{"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"I’ll call Granola once with meeting ID `abc`."}}
+{"type":"item.started","item":{"id":"item_1","type":"mcp_tool_call","server":"granola","tool":"get_meeting_transcript","arguments":{"meeting_id":"abc"},"result":null,"error":null,"status":"in_progress"}}
+{"type":"item.completed","item":{"id":"item_1","type":"mcp_tool_call","server":"granola","tool":"get_meeting_transcript","arguments":{"meeting_id":"abc"},"result":{"content":[{"type":"text","text":"Ana: three attempts. SECRET-get_meeting_transcript-{\"meeting_id\":\"abc\"}"}],"structured_content":null},"error":null,"status":"completed"}}
+{"type":"item.completed","item":{"id":"item_2","type":"agent_message","text":""}}
+{"type":"turn.completed","usage":{"input_tokens":34779,"cached_input_tokens":0,"cache_write_input_tokens":0,"output_tokens":73,"reasoning_output_tokens":0}}

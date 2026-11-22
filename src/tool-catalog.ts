@@ -182,8 +182,8 @@ export interface ProviderEntry {
   adapter: ProviderAdapter | null;
   /** This is the provider Serra's jobs (and meeting capture) run on. */
   jobs: boolean;
-  /** Why the job provider is this one: the profile names it, or it's T3's default. */
-  chosenBy: 'profile' | 't3-default' | null;
+  /** Why the job provider is this one: the profile names it, the T3 project's default, or T3's global default. */
+  chosenBy: 'profile' | 't3-project' | 't3-default' | null;
   /** Why Serra can't work with it, in a sentence; null when it can. */
   unsupported: string | null;
   /** The CLI binary T3 runs for this instance, when its settings name one. */

@@ -123,11 +123,11 @@ const DRIVER_LABELS: Record<WorkerDriver, string> = { claude: 'Claude', codex: '
  * The T3 providers and which of them Serra lists servers for, from T3's settings and the profile's `worker.provider`.
  * Never a guess from the instance's name: an id T3's settings don't list is reported as unknown.
  */
-export const workerProviders = (provider: string | undefined, options: McpOptions = {}): { worker: McpOverview['worker']; providers: ProviderEntry[] } => {
-  const providers = providerEntries(readT3Providers({ home: options.home ?? homedir(), env: options.env ?? process.env }), provider);
+export const workerProviders = (provider: string | undefined, options: McpOptions = {}, projectPath?: string): { worker: McpOverview['worker']; providers: ProviderEntry[] } => {
+  const providers = providerEntries(readT3Providers({ home: options.home ?? homedir(), env: options.env ?? process.env, ...(projectPath ? { projectPath } : {}) }), provider);
   const job = jobProvider(providers);
   const drivers = [...new Set(providers.flatMap((entry) => (entry.adapter ? [entry.adapter] : [])))];
-  const note = !job ? "T3's settings don't name a default provider, so Serra can't tell which one jobs use. Set it in Settings › Worker."
+  const note = !job ? "Serra can't tell which provider jobs use: T3 picks the project's default, which Serra couldn't read. Set it in Settings › Worker."
     : job.unsupported ? `Jobs run on ${job.label}. ${job.unsupported}` : null;
   return { worker: { provider: provider?.trim() || null, drivers, note }, providers };
 };
@@ -437,7 +437,7 @@ export const missingToolWarnings = (
 export const mcpOverview = (profile: Pick<Profile, 'project' | 'worker' | 'messageTriggers'>, options: McpOptions = {}): McpOverview => {
   const home = options.home ?? homedir();
   const env = options.env ?? process.env;
-  const { worker, providers } = workerProviders(profile.worker?.provider, { home, env });
+  const { worker, providers } = workerProviders(profile.worker?.provider, { home, env }, profile.project.path);
   const read = worker.drivers.map((driver) => (driver === 'claude' ? readClaude : readCodex)(profile.project.path, home, env));
   const servers = read.flatMap((result) => result.servers);
   const warnings = missingToolWarnings(requiredTools(profile.messageTriggers), servers, warnDrivers(providers));

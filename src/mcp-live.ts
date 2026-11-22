@@ -200,7 +200,7 @@ export const liveMcpOverview = async (
     : toolEnv(login.path, { ...process.env, ...options.env });
   // The fallback reads the config folders the CLI would: CLAUDE_CONFIG_DIR and CODEX_HOME from the same environment.
   const configEnv = options.env ?? login.env ?? process.env;
-  const { worker, providers } = workerProviders(profile.worker?.provider, { home, env: configEnv });
+  const { worker, providers } = workerProviders(profile.worker?.provider, { home, env: configEnv }, profile.project.path);
   const reads = await Promise.all(worker.drivers.map((driver: WorkerDriver) =>
     (driver === 'claude' ? listClaude : listCodex)(profile.project.path, home, { ...options, env: configEnv }, run, env)));
   const servers = reads.flatMap((read) => read.servers);

@@ -170,9 +170,12 @@ const ServerItem = ({ server }: { server: McpServer }) => (
 
 /** T3 providers Serra can't read yet: their mark, name and why, never a guess at their servers. */
 const UnsupportedProviders = ({ providers }: { providers: ProviderEntry[] }) => (
-  <div className="flex flex-col gap-2">
-    <h3 className="text-[13px] font-medium">Other T3 providers</h3>
-    <ul aria-label="T3 providers Serra can't read yet" className="@container divide-y divide-line-subtle rounded-xl border border-line">
+  <details className="group rounded-xl border border-line" open={providers.some((entry) => entry.jobs)}>
+    <summary className="flex cursor-default list-none items-center gap-2 rounded-xl px-4 py-3 text-sm text-muted hover:bg-hover focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus [&::-webkit-details-marker]:hidden">
+      <ChevronDown size={14} aria-hidden className="-rotate-90 transition-transform group-open:rotate-0" />
+      Other T3 providers <span className="text-faint">· {providers.length}, not supported yet</span>
+    </summary>
+    <ul aria-label="T3 providers Serra can't read yet" className="@container divide-y divide-line-subtle border-t border-line">
       {providers.map((entry) => (
         <Row
           key={entry.id}
@@ -184,7 +187,7 @@ const UnsupportedProviders = ({ providers }: { providers: ProviderEntry[] }) => 
         />
       ))}
     </ul>
-  </div>
+  </details>
 );
 
 const ProviderGroup = ({ group, onError }: { group: DriverGroup; onError: (message: string) => void }) => {

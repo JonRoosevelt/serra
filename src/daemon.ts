@@ -160,7 +160,7 @@ export const startDaemon = async (deps: DaemonDeps): Promise<Daemon> => {
     let path: Promise<string> | null = null;
     const runtimes = new Map<string, MeetingRuntime>();
     const runtime = async (): Promise<MeetingRuntime> => {
-      const choice = meetingRuntime({ path: await (path ??= toolSearchPath().catch(() => process.env.PATH ?? '')), worker });
+      const choice = meetingRuntime({ path: await (path ??= toolSearchPath().catch(() => process.env.PATH ?? '')), worker, projectPath: config.project });
       if (!choice.runtime) throw new Error(choice.unsupported);
       const key = `${choice.runtime.provider.id}|${choice.runtime.provider.binaryPath ?? ''}|${worker.model ?? ''}`;
       if (!runtimes.has(key)) runtimes.set(key, choice.runtime);
@@ -169,7 +169,7 @@ export const startDaemon = async (deps: DaemonDeps): Promise<Daemon> => {
     const extractor = deps.meetings?.extractor ?? { extract: async (prompt: string) => (await runtime()).extract(prompt) };
     const sources = deps.meetings?.sources ?? { fetchTranscript: async (link: Parameters<MeetingCaptureDeps['sources']['fetchTranscript']>[0]) => (await runtime()).fetchTranscript(link) };
     const ready = deps.meetings?.ready ?? (() => {
-      const provider = jobProvider(providerEntries(readT3Providers(), worker.provider));
+      const provider = jobProvider(providerEntries(readT3Providers({ projectPath: config.project }), worker.provider));
       return provider?.adapter ? null : unsupportedMeetings(provider);
     });
     const meetings = createMeetingCapture({

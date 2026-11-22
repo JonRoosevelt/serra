@@ -88,8 +88,8 @@ export const driverGroups = (overview: McpOverview): DriverGroup[] => overview.w
 /** A few words beside the MCP heading: which T3 provider jobs run on, and where that comes from. */
 export const providerLine = (overview: Pick<McpOverview, 'providers'>): string => {
   const job = overview.providers.find((entry) => entry.jobs);
-  if (!job) return "Jobs: T3's default, which Serra can't read";
-  return `Jobs run on ${job.label}${job.chosenBy === 't3-default' ? ", T3's default" : ''}`;
+  if (!job) return "Jobs: T3's project default, which Serra can't read";
+  return `Jobs run on ${job.label}${job.chosenBy === 't3-project' ? ", the project's default in T3" : job.chosenBy === 't3-default' ? ", T3's default" : ''}`;
 };
 
 /** T3 providers whose MCP servers Serra can't read yet, each with why: never a guess at their config. */

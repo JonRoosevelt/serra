@@ -34,7 +34,10 @@ export const meetingsHandlers = (context: HandlerContext): Handlers<'meetings'> 
       return settings();
     },
     // The provider the jobs use (SERRA-63): the profile's worker, else T3's default. Never another one.
-    sources: async () => meetingProviderView({ path: await toolSearchPath(), worker: readProfileFile(context.profileDir()).worker ?? {} }),
+    sources: async () => {
+      const profile = readProfileFile(context.profileDir());
+      return meetingProviderView({ path: await toolSearchPath(), worker: profile.worker ?? {}, projectPath: profile.project.path });
+    },
     list: () => store().listMeetings(),
     history: () => store().history(),
     approve: (meeting, item, reviewed) => store().approve(id(meeting, 'Meeting'), id(item, 'Edit'), reviewedInput(reviewed)),

@@ -18,7 +18,7 @@ import { existsSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSyn
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { findExecutable, toolEnv } from './exec.ts';
-import { EXTRACTOR_SYSTEM_PROMPT, parseDigestOutput } from './meeting-digest.ts';
+import { EXTRACTOR_SYSTEM_PROMPT, parseDigestOutput, TOOL_PROBE_PROMPT } from './meeting-digest.ts';
 import { isRecord, parseJson } from './json-guards.ts';
 
 /** Claude Code builds phase 1 was tested with. Add a build here only after the self-test passes on it. */
@@ -208,6 +208,9 @@ export const createExtractor = ({
       if (turns > 1) return { ok: false, reason: 'The extractor used a tool.' };
       if (existsSync(join(folder, '.claude'))) return { ok: false, reason: 'The extractor saved a session.' };
       parseDigestOutput(text);
+      // The direct probe: asked plainly to use every tool, a launch with no tools still answers in one turn.
+      const probe = await launch(checked, 'You are a test harness.', TOOL_PROBE_PROMPT, folder);
+      if (probe.turns > 1) return { ok: false, reason: 'The extractor used a tool when asked to.' };
       selfTested.add(checked.fingerprint);
       return { ok: true, reason: null };
     } catch (error) {
@@ -228,10 +231,11 @@ export const createExtractor = ({
     return text;
   };
 
-  /** Readiness without a model call: the preflight alone. */
+  /** Readiness: the preflight and the self-test (a model call, once per binary). */
   const check = async (): Promise<{ ok: boolean; reason: string | null }> => {
     const checked = await preflight();
-    return { ok: checked.ok, reason: checked.reason };
+    if (!checked.ok) return { ok: checked.ok, reason: checked.reason };
+    return selfTest(checked);
   };
 
   return { preflight, selfTest, extract, check };

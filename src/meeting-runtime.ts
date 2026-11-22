@@ -18,7 +18,7 @@ export interface MeetingRuntime {
   fetchTranscript: (link: MeetingLink) => Promise<Fetched>;
   /** Whether Granola and Meet can be read through this provider now. */
   sources: () => Promise<ProviderStatus[]>;
-  /** Whether extraction is ready, without a model call. */
+  /** Whether extraction is ready: the provider's checks and its no-tools self-test (once per binary). */
   check: () => Promise<{ ok: boolean; reason: string | null }>;
 }
 
@@ -29,6 +29,8 @@ export interface RuntimeOptions {
   path: string;
   /** The profile's `worker.provider` and `worker.model`. */
   worker?: { provider?: string; model?: string };
+  /** The project's folder, for the T3 project's own default provider. */
+  projectPath?: string;
   /** T3's settings, for tests; read from T3's data folder otherwise. */
   t3?: T3ProviderSettings;
   /** Builds adapters; tests pass fakes. */
@@ -50,18 +52,31 @@ const codexRuntime = (provider: ProviderEntry, path: string, model: string | und
 /** The sentence Settings and the DM reply show when meetings can't run on the job provider. */
 export const unsupportedMeetings = (provider: ProviderEntry | null): string => (provider
   ? `Meetings can't run on ${provider.label} yet, the provider your jobs use. ${provider.unsupported ?? ''} Serra won't use another provider instead.`.replace(/\s+/g, ' ').trim()
-  : "Serra can't tell which provider your jobs use: neither your profile nor T3's settings name one. Set it in Settings › Worker.");
+  : "Serra can't tell which provider your jobs use: T3 picks the project's default, which Serra couldn't read. Set the provider in Settings › Worker, so meetings run where your jobs do.");
+
+/**
+ * A runtime that fetches nothing until its extractor passes the no-tools self-test: a transcript is never pulled
+ * through a provider that couldn't then read it safely.
+ */
+const gated = (runtime: MeetingRuntime): MeetingRuntime => ({
+  ...runtime,
+  fetchTranscript: async (link) => {
+    const ready = await runtime.check();
+    if (!ready.ok) throw new Error(ready.reason ?? `Meetings can't run on ${runtime.provider.label} yet.`);
+    return runtime.fetchTranscript(link);
+  },
+});
 
 /**
  * The meeting runtime for the provider jobs run on, or why there is none. The worker's model goes with it only when
  * the profile names the provider: a model is specific to one provider.
  */
-export const meetingRuntime = ({ path, worker, t3, adapters = {} }: RuntimeOptions): MeetingRuntimeChoice => {
-  const provider = jobProvider(providerEntries(t3 ?? readT3Providers(), worker?.provider));
+export const meetingRuntime = ({ path, worker, projectPath, t3, adapters = {} }: RuntimeOptions): MeetingRuntimeChoice => {
+  const provider = jobProvider(providerEntries(t3 ?? readT3Providers(projectPath ? { projectPath } : {}), worker?.provider));
   if (!provider?.adapter) return { runtime: null, provider, unsupported: unsupportedMeetings(provider) };
   const model = worker?.provider?.trim() ? worker.model : undefined;
   const build = provider.adapter === 'claude' ? adapters.claude ?? claudeRuntime : adapters.codex ?? codexRuntime;
-  return { runtime: build(provider, path, model), unsupported: null };
+  return { runtime: gated(build(provider, path, model)), unsupported: null };
 };
 
 /** What Settings › Meetings shows: the provider meetings run on, whether it's ready, and its Granola and Meet sources. */
@@ -69,7 +84,7 @@ export interface MeetingProviderView {
   provider: ProviderEntry | null;
   /** Why meetings can't run on it, or null. Never followed by another provider. */
   unsupported: string | null;
-  /** The extractor's readiness (no model call), or null when unsupported. */
+  /** The extractor's readiness (its checks and no-tools self-test), or null when unsupported. */
   extraction: { ok: boolean; reason: string | null } | null;
   sources: ProviderStatus[];
 }

@@ -31,8 +31,8 @@ Meetings run on **the provider your jobs use**: the T3 provider instance in Sett
 | Provider | Meetings | How the transcript is read |
 |---|---|---|
 | Claude | Yes | `claude -p` with no tools, no MCP servers and no saved session |
-| Codex | Yes | `codex exec` with no user config, a read-only sandbox, every tool feature off and its tool host disabled, so any tool call fails closed |
-| Cursor, Antigravity, OpenCode and other T3 providers | Not yet | Capture is refused with a plain message |
+| Codex | Not yet | `codex exec` in its strictest mode: no user config, a read-only sandbox, every feature that's on turned off, and no tool host. Codex 0.171.0 still offers code-mode and sub-agent tools in that mode, and models call them, so it fails the self-test below. Serra refuses rather than run with tools |
+| Cursor, Antigravity, OpenCode and other T3 providers | Not yet | Serra has no adapter for them |
 
 If your jobs run on a provider Serra can't use for meetings, capture is refused. **Serra never moves a meeting to another provider.**
 
@@ -41,13 +41,17 @@ Before any transcript is sent, Serra checks the provider each time:
 - no managed settings could add hooks or tools;
 - a probe of the exact launch confirms no tools. For Claude that's zero tools and zero MCP servers; for Codex it's Codex's own "tool host disabled" notice, read before the model's turn.
 
-A canary self-test then runs once per binary. It asks the model to read a planted file, run a command and call a tool, and fails on any tool use or any trace of the file.
+Then the same no-tools self-test for every provider, once per binary:
+- a synthetic transcript asks the model to read a file in its folder and one outside it, run a command, start a sub-agent and call any tool;
+- a direct probe asks it plainly to call every tool it has.
+
+It fails on any tool call, including one that failed closed, and on any trace of either file. Settings › Meetings › Check runs it and shows the result. No transcript is fetched or read through a provider that hasn't passed it.
 
 ## Sources
 
 Serra never holds a Granola or Google key. It reads through **your job provider's own connections**:
 
-| Source | Claude | Codex |
+| Source | Claude | Codex (once it passes the self-test) |
 |---|---|---|
 | Granola | The Granola connector (claude.ai › Settings › Connectors), or `claude mcp add granola --transport http https://mcp.granola.ai/mcp`, then `/mcp` | `codex mcp add granola --url https://mcp.granola.ai/mcp`, then `codex mcp login granola` |
 | Google Meet | The Google Drive connector, signed in | A Google Drive MCP server added with `codex mcp add`. Codex's built-in apps can't be limited to one read tool, so Serra doesn't use them |
@@ -60,7 +64,7 @@ To read a meeting, the provider's CLI gets exactly one read tool (Granola's `get
 - with every built-in tool off and every other MCP server off;
 - with the meeting's ID as the only input.
 
-Serra takes the transcript from the tool's result and stops the CLI. Claude Code stops before any model sees the result. Codex may already pass it to its model, which has no other tool, and Serra never uses its answer.
+Serra takes the transcript from the tool's result and stops the CLI. Claude Code stops before any model sees the result. The Codex fetch is built the same way (the owner's own Codex servers, every other server off), but it only runs once Codex passes the self-test.
 
 ## How it's read
 
