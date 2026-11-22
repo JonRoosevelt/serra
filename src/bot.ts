@@ -532,7 +532,9 @@ export const createBot = ({
     }
     const text = problem ? setupNotice(problem) : check && check.revoked.length > 0 ? WITHHELD : reply;
     const runMs = job.runSeen?.runId === runId ? now() - Date.parse(job.runSeen.at) : undefined;
-    const measured = { key, runId, byWorker, runMs, jobAgeMs: now() - Date.parse(job.createdAt) };
+    // A notice posted in place of the reply (a Slack setup problem, or a withheld answer) isn't the run's result.
+    const inPlace = Boolean(problem) || text === WITHHELD;
+    const measured = { key, runId, byWorker, runMs, jobAgeMs: now() - Date.parse(job.createdAt), ...(inPlace ? { notice: true } : {}) };
     await clearProgress(key, job);
     if (QUIET.test(text)) {
       // Nothing to say: the 👀 goes away, which tells the thread the message was seen.
@@ -603,7 +605,8 @@ export const createBot = ({
         })
         : false;
       // A new post in place of a failed edit is checked again first: time has passed.
-      const statusTs = edited ? job.statusTs : (await client.chat.postMessage({ ...message, ...(await withheldIfRevoked(job, body)), thread_ts: job.threadTs })).ts;
+      const swapped = edited ? {} : await withheldIfRevoked(job, body);
+      const statusTs = edited ? job.statusTs : (await client.chat.postMessage({ ...message, ...swapped, thread_ts: job.threadTs })).ts;
       updateJob(key, (latest) => ({
         lastPostedRunId: runId,
         ...seenOver(latest, thread),
@@ -613,7 +616,9 @@ export const createBot = ({
         lastActivityAt: new Date(now()).toISOString(),
       }));
       await finishLoading(key, job);
-      events('reply', { ...measured, kind: edited ? 'status_edited' : 'status_posted' });
+      // Checked again from what was posted: access can be taken back between the first check and the post.
+      const withheld = [WITHHELD, UNCONFIRMED].includes(body) || [WITHHELD, UNCONFIRMED].includes(swapped.text ?? '');
+      events('reply', { ...measured, ...(withheld ? { notice: true } : {}), kind: edited ? 'status_edited' : 'status_posted' });
       return;
     }
 
@@ -647,7 +652,7 @@ export const createBot = ({
       ...(review.postedFor ? { reviewRequestedPrs: [...(latest.reviewRequestedPrs ?? []), review.postedFor] } : {}),
     }));
     await finishLoading(key, job);
-    events('reply', { ...measured, kind: 'reply', needsOwner: blocked, reviewRequested: reviewPosted });
+    events('reply', { ...measured, ...([WITHHELD, UNCONFIRMED].includes(body) ? { notice: true } : {}), kind: 'reply', needsOwner: blocked, reviewRequested: reviewPosted });
     if (notice === 'callout') events('needs_owner', { key });
   };
 
