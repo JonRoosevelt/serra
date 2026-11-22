@@ -2,14 +2,15 @@
 // each provider gives it (managed in Claude or Codex, never here), and the command-line tools on this Mac. Nothing
 // on this screen runs an install, a sign-in or an `mcp add`: commands are shown for people to copy.
 import { useCallback, useEffect, useId, useState, type ReactNode } from 'react';
-import { ChevronDown, CircleAlert, Cloud, Copy, ExternalLink, Info, Plug, RefreshCw, Terminal, TriangleAlert } from 'lucide-react';
+import { Bot, ChevronDown, CircleAlert, Cloud, Copy, ExternalLink, Info, Plug, RefreshCw, Terminal, TriangleAlert } from 'lucide-react';
 import type { CliOverview } from '../../../src/clis.ts';
 import type { McpOverview, McpServer } from '../../../src/mcp.ts';
+import type { ProviderEntry } from '../../../src/tool-catalog.ts';
 import { serra } from '../bridge.ts';
 import { Badge, Button, cx, Page, useToast } from '../ui/index.ts';
 import { ToolIcon } from '../ui/ToolIcon.tsx';
 import {
-  brandFor, cliRows, driverGroups, providerLine, recommendationRows, recommendedCliIds, serverBrand, serverLabel, serverOrigin, serverStatus,
+  brandFor, cliRows, driverGroups, providerBrand, providerLine, recommendationRows, unsupportedProviders, recommendedCliIds, serverBrand, serverLabel, serverOrigin, serverStatus,
   transportLabel, type CliRow, type DriverGroup, type RecommendationRow, type Status,
 } from './tools.logic.ts';
 
@@ -167,13 +168,34 @@ const ServerItem = ({ server }: { server: McpServer }) => (
   />
 );
 
+/** T3 providers Serra can't read yet: their mark, name and why, never a guess at their servers. */
+const UnsupportedProviders = ({ providers }: { providers: ProviderEntry[] }) => (
+  <div className="flex flex-col gap-2">
+    <h3 className="text-[13px] font-medium">Other T3 providers</h3>
+    <ul aria-label="T3 providers Serra can't read yet" className="@container divide-y divide-line-subtle rounded-xl border border-line">
+      {providers.map((entry) => (
+        <Row
+          key={entry.id}
+          icon={<ToolIcon brand={providerBrand(entry.icon)} fallback={<Bot size={14} />} label={entry.label} />}
+          title={entry.label}
+          sub={entry.unsupported ?? undefined}
+          badge={entry.jobs ? <Badge tone="warn">Jobs</Badge> : undefined}
+          status={{ tone: entry.jobs ? 'warn' : 'off', text: 'Not supported yet' }}
+        />
+      ))}
+    </ul>
+  </div>
+);
+
 const ProviderGroup = ({ group, onError }: { group: DriverGroup; onError: (message: string) => void }) => {
   const id = useId();
   return (
     <div className="@container flex flex-col gap-2" data-driver={group.driver}>
       <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
-        <h3 id={id} className="text-[13px] font-medium">
-          {group.title} <span className="font-normal text-muted">· {group.summary}</span>
+        <h3 id={id} className="flex items-center gap-2 text-[13px] font-medium">
+          <ToolIcon brand={providerBrand(group.instances[0]?.icon ?? 'bot')} fallback={<Bot size={14} />} label={group.title} className="size-6" />
+          <span>{group.title} <span className="font-normal text-muted">· {group.summary}</span></span>
+          {group.jobs && <Badge tone="accent">Jobs</Badge>}
         </h3>
         <div className="flex min-w-0 items-center gap-1 text-xs text-muted">
           <span className="shrink-0">Managed in {group.title}</span>
@@ -252,12 +274,14 @@ export const Tools = () => {
           : <Pending text="Checking…" />}
       </Section>
 
-      <Section title="MCP servers" aside={mcp ? providerLine(mcp.worker) : undefined}>
+      <Section title="MCP servers" aside={mcp ? providerLine(mcp) : undefined}>
         {mcpError && <Failed text={mcpError} />}
-        {!mcp && !mcpError && <Pending text="Asking Claude and Codex for their servers…" />}
+        {!mcp && !mcpError && <Pending text="Asking each provider for its servers…" />}
         {mcp && (
           <div className="flex flex-col gap-6">
+            {mcp.worker.note && <p className="flex items-start gap-2 text-xs text-warn"><TriangleAlert size={13} aria-hidden className="mt-0.5 shrink-0" />{mcp.worker.note}</p>}
             {driverGroups(mcp).map((group) => <ProviderGroup key={group.driver} group={group} onError={onError} />)}
+            {unsupportedProviders(mcp).length > 0 && <UnsupportedProviders providers={unsupportedProviders(mcp)} />}
             <p className="text-xs text-muted">T3 also gives every job its own <code className="font-mono">t3-code</code> server.</p>
           </div>
         )}

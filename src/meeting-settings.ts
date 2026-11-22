@@ -9,12 +9,12 @@ import { isRecord, parseJson } from './json-guards.ts';
 const MEETING_SETTINGS_FILE = 'meeting-capture.json';
 
 /** What the owner acknowledges by turning capture on. A new version asks again. */
-const MEETING_NOTICE_VERSION = 1;
+const MEETING_NOTICE_VERSION = 2;
 export const MEETING_NOTICE = [
   'Add only meetings you were in, recorded with everyone’s knowledge, that your team may hear about. Your teammates can see what you keep.',
-  'Claude reads the transcript once, with no tools, after Serra redacts secrets. For a Granola or Meet link, Claude Code first fetches it through your own connection with one read tool, and stops before any model sees it. Serra never stores the transcript. It keeps the decisions you approve, short quotes for review until you approve or discard them (up to 30 days), and a digest message in your DM.',
+  'The provider your jobs use (Claude or Codex) reads the transcript once, in its strictest mode with no tools, after Serra redacts secrets. For a Granola or Meet link, that provider first fetches it through your own connection with one read tool. If your jobs use a provider Serra can’t run meetings on yet, capture is refused; it never moves to another provider. Serra never stores the transcript. It keeps the decisions you approve, short quotes for review until you approve or discard them (up to 30 days), and a digest message in your DM.',
   'Until workers are isolated from the profile folder, Serra’s own workers could read those pending quotes on this Mac.',
-  'Forget meeting removes all of these, except your upload in Slack, the copy Claude processed, and app tasks that already read them.',
+  'Forget meeting removes all of these, except your upload in Slack, the copy your provider processed, and app tasks that already read them.',
 ].join('\n\n');
 
 export interface MeetingSettings {

@@ -41,6 +41,8 @@ export type SpawnClaude = (command: string, args: readonly string[], options: { 
 export interface ExtractorOptions {
   /** PATH to find `claude` in. */
   path: string;
+  /** The binary T3's provider instance names (SERRA-63), else `claude` on `path`. */
+  binary?: string;
   /** The model alias or name. */
   model?: string;
   spawn?: SpawnClaude;
@@ -113,7 +115,7 @@ const run = (spawnClaude: SpawnClaude, binary: string, args: readonly string[], 
 });
 
 export const createExtractor = ({
-  path, model = 'sonnet', spawn: spawnClaude = (command, args, options) => spawn(command, args, { ...options, stdio: ['pipe', 'pipe', 'pipe'] }),
+  path, binary: named, model = 'sonnet', spawn: spawnClaude = (command, args, options) => spawn(command, args, { ...options, stdio: ['pipe', 'pipe', 'pipe'] }),
   managedSettingsDir = MANAGED_SETTINGS_DIR, tmpRoot = tmpdir(), versions = SUPPORTED_CLAUDE_VERSIONS, timeoutMs = TIMEOUT_MS,
 }: ExtractorOptions) => {
   const env = { ...toolEnv(path), DISABLE_AUTOUPDATER: '1', CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1' };
@@ -130,7 +132,7 @@ export const createExtractor = ({
    */
   const preflight = async (): Promise<Preflight> => {
     const refuse = (reason: string, extra: Partial<Preflight> = {}): Preflight => ({ ok: false, reason, version: null, binary: null, fingerprint: null, ...extra });
-    const binary = findExecutable('claude', path);
+    const binary = named ?? findExecutable('claude', path);
     if (!binary) return refuse('Claude Code isn\'t installed where Serra can find it. Install it and sign in, then try again.');
     const settings = managedSettings(managedSettingsDir);
     if (settings.hooks.length) return refuse(`Claude Code has managed hooks (${settings.hooks.join(', ')}), which would see the transcript. Meeting capture stays off while they're set.`, { binary });
@@ -226,7 +228,13 @@ export const createExtractor = ({
     return text;
   };
 
-  return { preflight, selfTest, extract };
+  /** Readiness without a model call: the preflight alone. */
+  const check = async (): Promise<{ ok: boolean; reason: string | null }> => {
+    const checked = await preflight();
+    return { ok: checked.ok, reason: checked.reason };
+  };
+
+  return { preflight, selfTest, extract, check };
 };
 
 export type Extractor = ReturnType<typeof createExtractor>;

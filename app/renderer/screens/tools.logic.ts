@@ -2,7 +2,7 @@
 // which services to recommend. Pure functions, tested with `node --test`.
 import type { CliOverview, CliStatus } from '../../../src/clis.ts';
 import type { McpOverview, McpScope, McpServer, WorkerDriver } from '../../../src/mcp.ts';
-import { CLI_CATALOG, PROVIDER_MCP, RECOMMENDATIONS, type CliSpec, type Recommendation, type ToolIcon } from '../../../src/tool-catalog.ts';
+import { CLI_CATALOG, PROVIDER_MCP, RECOMMENDATIONS, type CliSpec, type ProviderEntry, type ProviderIcon, type Recommendation, type ToolIcon } from '../../../src/tool-catalog.ts';
 import type { BrandId } from '../ui/brand-icons.ts';
 
 const DRIVER_NAMES: Record<WorkerDriver, string> = { claude: 'Claude', codex: 'Codex' };
@@ -47,6 +47,10 @@ export const serverLabel = (server: Pick<McpServer, 'name' | 'scope'>): string =
 export interface DriverGroup {
   driver: WorkerDriver;
   title: string;
+  /** The T3 provider instances this group's servers serve, the job provider's first. */
+  instances: ProviderEntry[];
+  /** Jobs run on one of these instances. */
+  jobs: boolean;
   servers: McpServer[];
   /** "3 servers" or "No servers". */
   summary: string;
@@ -58,8 +62,12 @@ export interface DriverGroup {
   hint: { command: string; docs: string };
 }
 
-/** One group per provider the worker may use: problems first, then by where the server comes from, then by name. */
+/**
+ * One group per provider kind Serra can read (SERRA-63), the job provider's first: problems first, then by where the
+ * server comes from, then by name. T3 providers Serra can't read are in `unsupportedProviders`.
+ */
 export const driverGroups = (overview: McpOverview): DriverGroup[] => overview.worker.drivers.map((driver) => {
+  const instances = overview.providers.filter((entry) => entry.adapter === driver);
   const servers = overview.servers
     .filter((server) => server.driver === driver)
     .sort((a, b) => STATUS_ORDER[serverStatus(a).tone] - STATUS_ORDER[serverStatus(b).tone]
@@ -67,20 +75,28 @@ export const driverGroups = (overview: McpOverview): DriverGroup[] => overview.w
   return {
     driver,
     title: DRIVER_NAMES[driver],
+    instances,
+    jobs: instances.some((entry) => entry.jobs),
     servers,
     summary: servers.length ? `${servers.length} ${servers.length === 1 ? 'server' : 'servers'}` : 'No servers',
     listingNote: overview.listing.find((listing) => listing.driver === driver)?.note ?? null,
     unreadable: overview.files.filter((file) => file.driver === driver && file.state === 'unreadable').map((file) => file.path),
     hint: { command: PROVIDER_MCP[driver].add('<name>', '<url>'), docs: PROVIDER_MCP[driver].docs },
   };
-});
+}).sort((a, b) => Number(b.jobs) - Number(a.jobs));
 
-/** A few words beside the MCP heading: which provider the worker runs on, or why both are listed. */
-export const providerLine = (worker: McpOverview['worker']): string => {
-  if (!worker.provider) return 'No worker provider set, so both are listed';
-  if (worker.drivers.length > 1) return `"${worker.provider}" isn't Claude or Codex, so both are listed`;
-  return `Worker: ${worker.provider}`;
+/** A few words beside the MCP heading: which T3 provider jobs run on, and where that comes from. */
+export const providerLine = (overview: Pick<McpOverview, 'providers'>): string => {
+  const job = overview.providers.find((entry) => entry.jobs);
+  if (!job) return "Jobs: T3's default, which Serra can't read";
+  return `Jobs run on ${job.label}${job.chosenBy === 't3-default' ? ", T3's default" : ''}`;
 };
+
+/** T3 providers whose MCP servers Serra can't read yet, each with why: never a guess at their config. */
+export const unsupportedProviders = (overview: Pick<McpOverview, 'providers'>): ProviderEntry[] => overview.providers.filter((entry) => !entry.adapter);
+
+/** A provider's mark, or null for the generic one. */
+export const providerBrand = (icon: ProviderIcon): BrandId | null => (icon === 'bot' ? null : icon);
 
 /** Where a server comes from, in a few words: "User config · ~/.claude.json", "claude.ai connector", "Added by Codex". */
 export const serverOrigin = (server: Pick<McpServer, 'scope' | 'source' | 'driver'>): string => {

@@ -24,7 +24,7 @@ import type { BotSync } from './bot-sync.ts';
 import type { InterviewPreview, StartedTask } from '../../src/tasks.ts';
 import type { MeetingReviewed, MeetingView } from '../../src/meeting-store.ts';
 import type { MeetingSettings } from '../../src/meeting-settings.ts';
-import type { ProviderStatus } from '../../src/meeting-sources.ts';
+import type { MeetingProviderView } from '../../src/meeting-runtime.ts';
 import type { DetectedProject, OwnerConfirmed, ProfileDraft, ProfileSummary, SetupProgress, SlackManifest } from '../../src/setup.ts';
 // The one value import: a pure module, so the preload bundle stays free of Node.
 import { SETUP_INCOMPLETE, SetupIncomplete } from '../../src/setup-incomplete.ts';
@@ -320,8 +320,11 @@ export interface SerraApi {
     /** Whether capture is on, and the notice the owner acknowledges by turning it on. */
     settings(): MeetingSettings & { notice: string };
     setEnabled(enabled: boolean): MeetingSettings & { notice: string };
-    /** Whether Granola and Google Meet can be read through Claude Code now, and what to do if not. Takes a few seconds. */
-    sources(): ProviderStatus[];
+    /**
+     * The provider meetings run on (the one jobs use, SERRA-63), whether its no-tools extractor is ready, and whether
+     * Granola and Google Meet can be read through it now. Takes a few seconds.
+     */
+    sources(): MeetingProviderView;
     /** Meetings with edits waiting, each rendered against the page as it is now. */
     list(): MeetingView[];
     /** Every meeting Serra kept anything from, for Forget meeting. */

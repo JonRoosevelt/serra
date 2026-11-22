@@ -133,3 +133,62 @@ export const PROVIDER_MCP = {
     login: (name: string) => `codex mcp login ${shellWord(name)}`,
   },
 } as const;
+
+// ---------------------------------------------------------------------------------------------------------------
+// T3 providers (SERRA-63)
+// ---------------------------------------------------------------------------------------------------------------
+
+/** The providers Serra has an adapter for: it can read their MCP config and run meeting capture through their CLI. */
+type ProviderAdapter = 'claude' | 'codex';
+
+/** A provider's mark in app/renderer/ui/brand-icons.ts, or `bot` for a generic one. */
+export type ProviderIcon = 'claude' | 'cursor' | 'opencode' | 'bot';
+
+/** One kind of T3 provider (a T3 "driver"), and what Serra can do with it. */
+export interface ProviderKind {
+  /** T3's driver kind, which is also the id of its built-in instance (`claudeAgent`, `codex`, `cursor`). */
+  driver: string;
+  label: string;
+  icon: ProviderIcon;
+  /** Null: Serra can't read this provider's MCP config or run meetings through it yet, and says so. */
+  adapter: ProviderAdapter | null;
+}
+
+/**
+ * T3's provider drivers, as T3 lists its built-in instances. Serra never guesses at a provider's config: a driver
+ * without an adapter is shown as "not supported yet", and an instance T3 lists with a driver missing here likewise.
+ */
+export const T3_PROVIDERS: readonly ProviderKind[] = [
+  { driver: 'claudeAgent', label: 'Claude', icon: 'claude', adapter: 'claude' },
+  { driver: 'codex', label: 'Codex', icon: 'bot', adapter: 'codex' },
+  { driver: 'cursor', label: 'Cursor', icon: 'cursor', adapter: null },
+  { driver: 'antigravity', label: 'Antigravity', icon: 'bot', adapter: null },
+  { driver: 'opencode', label: 'OpenCode', icon: 'opencode', adapter: null },
+  { driver: 'grok', label: 'Grok', icon: 'bot', adapter: null },
+  { driver: 'kiro', label: 'Kiro', icon: 'bot', adapter: null },
+  { driver: 'pi', label: 'Pi', icon: 'bot', adapter: null },
+  { driver: 'muse', label: 'Muse Code', icon: 'bot', adapter: null },
+  { driver: 'fx', label: 'fx', icon: 'bot', adapter: null },
+];
+
+/** A T3 provider instance as Serra shows it: which kind it is, and whether Serra can work with it. */
+export interface ProviderEntry {
+  /** T3's instance id, as `worker.provider` names it. */
+  id: string;
+  /** T3's driver kind, or null when Serra can't tell (an instance T3's settings don't list). */
+  driver: string | null;
+  label: string;
+  icon: ProviderIcon;
+  adapter: ProviderAdapter | null;
+  /** This is the provider Serra's jobs (and meeting capture) run on. */
+  jobs: boolean;
+  /** Why the job provider is this one: the profile names it, or it's T3's default. */
+  chosenBy: 'profile' | 't3-default' | null;
+  /** Why Serra can't work with it, in a sentence; null when it can. */
+  unsupported: string | null;
+  /** The CLI binary T3 runs for this instance, when its settings name one. */
+  binaryPath?: string;
+}
+
+/** The sentence a provider without an adapter gets. Never a guess at where its config is. */
+export const unsupportedProvider = (label: string, what: string): string => `Serra can't ${what} ${label} yet.`;

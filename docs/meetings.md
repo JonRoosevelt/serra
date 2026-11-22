@@ -24,28 +24,45 @@ Only your own messages count, and only as a new message in your DM. With capture
 
 Only team meetings for now: until workers are isolated from the profile folder, any worker could read pending quotes.
 
+## Which provider reads it
+
+Meetings run on **the provider your jobs use**: the T3 provider instance in Settings › Worker, or T3's default when that's empty. Settings › Meetings shows which one, and whether it's ready. Each provider uses its own connections and its own CLI in its strictest no-tools mode:
+
+| Provider | Meetings | How the transcript is read |
+|---|---|---|
+| Claude | Yes | `claude -p` with no tools, no MCP servers and no saved session |
+| Codex | Yes | `codex exec` with no user config, a read-only sandbox, every tool feature off and its tool host disabled, so any tool call fails closed |
+| Cursor, Antigravity, OpenCode and other T3 providers | Not yet | Capture is refused with a plain message |
+
+If your jobs run on a provider Serra can't use for meetings, capture is refused. **Serra never moves a meeting to another provider.**
+
+Before any transcript is sent, Serra checks the provider each time:
+- it's a build Serra was tested with;
+- no managed settings could add hooks or tools;
+- a probe of the exact launch confirms no tools. For Claude that's zero tools and zero MCP servers; for Codex it's Codex's own "tool host disabled" notice, read before the model's turn.
+
+A canary self-test then runs once per binary. It asks the model to read a planted file, run a command and call a tool, and fails on any tool use or any trace of the file.
+
 ## Sources
 
-Serra never holds a Granola or Google key. It reads through **your own Claude Code connections**, the same ones your workers use:
+Serra never holds a Granola or Google key. It reads through **your job provider's own connections**:
 
-| Source | What you need |
-|---|---|
-| Granola | The Granola connector in Claude (claude.ai › Settings › Connectors), or `claude mcp add granola --transport http https://mcp.granola.ai/mcp`, then sign in with `/mcp`. Transcripts need a Granola Business or Enterprise plan. |
-| Google Meet | The Google Drive connector in Claude, signed in. Meet saves transcripts to Drive on Workspace Business Standard and above, when transcription is on. |
-| File or paste | Nothing. Every notetaker exports text. |
+| Source | Claude | Codex |
+|---|---|---|
+| Granola | The Granola connector (claude.ai › Settings › Connectors), or `claude mcp add granola --transport http https://mcp.granola.ai/mcp`, then `/mcp` | `codex mcp add granola --url https://mcp.granola.ai/mcp`, then `codex mcp login granola` |
+| Google Meet | The Google Drive connector, signed in | A Google Drive MCP server added with `codex mcp add`. Codex's built-in apps can't be limited to one read tool, so Serra doesn't use them |
+| File or paste | Nothing | Nothing |
 
-Settings › Meetings › Sources › **Check** shows whether each works now and what to do if not.
+Granola transcripts need a Business or Enterprise plan. Meet saves transcripts to Drive on Workspace Business Standard and above, when transcription is on. Settings › Meetings › Sources › **Check** shows whether each works now and what to do if not.
 
-To read a meeting, Serra starts Claude Code (the same tested build, no managed hooks) for one turn with exactly one read tool allowed (Granola's `get_meeting_transcript`, or Drive's `read_file_content`), with exactly Serra's arguments, every built-in tool off, and the meeting's ID as the only input. Claude Code runs the tool and stops before any model sees the result; Serra takes the transcript from it.
+To read a meeting, the provider's CLI gets exactly one read tool (Granola's `get_meeting_transcript`, or Drive's `read_file_content`):
+- with exactly Serra's arguments;
+- with every built-in tool off and every other MCP server off;
+- with the meeting's ID as the only input.
+
+Serra takes the transcript from the tool's result and stops the CLI. Claude Code stops before any model sees the result. Codex may already pass it to its model, which has no other tool, and Serra never uses its answer.
 
 ## How it's read
-
-The extractor is one Claude Code call with **no tools, no MCP servers and no saved session**, from an empty folder, with the prompt on stdin. Before any transcript is sent, Serra checks:
-
-- the Claude Code version is one it was tested with;
-- managed settings define no hooks;
-- a probe of the same launch reports zero tools and zero MCP servers;
-- a canary self-test passes.
 
 Serra's checks narrow what reaches you:
 - each quote must be in the transcript;
@@ -65,4 +82,4 @@ Settings › Meetings › **Forget** removes everything a meeting added:
 - its pending quotes;
 - its digest message.
 
-It can't reach your upload in Slack, the copy Claude processed, or T3 threads that already read it.
+It can't reach your upload in Slack, the copy your provider processed, or T3 threads that already read it.

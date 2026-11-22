@@ -10,7 +10,7 @@ import { homedir } from 'node:os';
 import type { Profile } from './config.ts';
 import { exec, findExecutable, toolEnv, type Exec, type ExecResult } from './exec.ts';
 import {
-  missingToolWarnings, readClaude, readCodex, reported, requiredTools, workerDrivers,
+  missingToolWarnings, readClaude, readCodex, reported, requiredTools, workerProviders,
   type McpHealth, type McpListing, type McpOptions, type McpOverview, type McpScope, type McpTransport, type ReadServer, type WorkerDriver,
 } from './mcp.ts';
 import { loginEnvironment } from './shell-path.ts';
@@ -198,16 +198,17 @@ export const liveMcpOverview = async (
   const env: NodeJS.ProcessEnv = login.env
     ? { ...login.env, PATH: login.path, NO_COLOR: '1' }
     : toolEnv(login.path, { ...process.env, ...options.env });
-  const worker = workerDrivers(profile.worker?.provider);
   // The fallback reads the config folders the CLI would: CLAUDE_CONFIG_DIR and CODEX_HOME from the same environment.
   const configEnv = options.env ?? login.env ?? process.env;
+  const { worker, providers } = workerProviders(profile.worker?.provider, { home, env: configEnv });
   const reads = await Promise.all(worker.drivers.map((driver: WorkerDriver) =>
     (driver === 'claude' ? listClaude : listCodex)(profile.project.path, home, { ...options, env: configEnv }, run, env)));
   const servers = reads.flatMap((read) => read.servers);
+  const job = providers.find((entry) => entry.jobs);
   return {
-    worker,
+    worker, providers,
     servers: servers.map(reported),
-    warnings: missingToolWarnings(requiredTools(profile.messageTriggers), servers, worker.drivers),
+    warnings: missingToolWarnings(requiredTools(profile.messageTriggers), servers, job?.adapter ? [job.adapter] : []),
     files: reads.flatMap((read) => read.files),
     listing: reads.map((read) => read.listing),
   };

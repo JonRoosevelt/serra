@@ -83,7 +83,7 @@ export const PROVIDERS: Record<MeetingProvider, {
     tool: 'get_meeting_transcript',
     args: (id) => ({ meeting_id: id }),
     setup: 'Connect Granola in Claude: claude.ai › Settings › Connectors › Granola, or run `claude mcp add granola --transport http https://mcp.granola.ai/mcp` and sign in with /mcp.',
-    plan: 'Granola gives transcripts to Claude on its Business and Enterprise plans.',
+    plan: 'Granola gives transcripts over MCP on its Business and Enterprise plans.',
   },
   'google-meet': {
     label: 'Google Meet',
@@ -97,7 +97,7 @@ export const PROVIDERS: Record<MeetingProvider, {
 
 /** Claude Code's name for an MCP tool: `mcp__<server>__<tool>`, the server name with anything but letters, digits, `_` and `-` made `_`. */
 /** Every provider, in display order. */
-const PROVIDER_IDS: readonly MeetingProvider[] = ['granola', 'google-meet'];
+export const PROVIDER_IDS: readonly MeetingProvider[] = ['granola', 'google-meet'];
 
 const mcpToolName = (server: string, tool: string): string => `mcp__${server.replace(/[^A-Za-z0-9_-]/g, '_')}__${tool}`;
 
@@ -115,6 +115,8 @@ type StreamEvent = Record<string, unknown>;
 
 export interface FetchOptions {
   path: string;
+  /** The binary T3's provider instance names (SERRA-63), else `claude` on `path`. */
+  binary?: string;
   managedSettingsDir?: string;
   versions?: readonly string[];
   spawn?: SpawnClaude;
@@ -218,11 +220,11 @@ export const transcriptFromResult = (text: string): Fetched => {
 };
 
 export const createSourceReader = ({
-  path, spawn: spawnClaude = defaultSpawn, model = 'haiku', timeoutMs = 120_000, managedSettingsDir = MANAGED_SETTINGS_DIR, versions = SUPPORTED_CLAUDE_VERSIONS,
+  path, binary: named, spawn: spawnClaude = defaultSpawn, model = 'haiku', timeoutMs = 120_000, managedSettingsDir = MANAGED_SETTINGS_DIR, versions = SUPPORTED_CLAUDE_VERSIONS,
 }: FetchOptions) => {
   /** The `claude` binary, after the same checks as the extractor's: no managed hooks, which would see the tool result. */
   const binary = (): string => {
-    const found = findExecutable('claude', path);
+    const found = named ?? findExecutable('claude', path);
     if (!found) throw new Error('Claude Code isn\'t installed where Serra can find it.');
     const { hooks } = managedSettings(managedSettingsDir);
     if (hooks.length) throw new Error('Claude Code has managed hooks, which would see the transcript, so Serra won\'t read meetings through it.');

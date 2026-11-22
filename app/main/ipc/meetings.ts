@@ -4,7 +4,8 @@ import { join } from 'node:path';
 import { isRecord } from '../../../src/json-guards.ts';
 import { createMeetingStore, type MeetingReviewed } from '../../../src/meeting-store.ts';
 import { MEETING_NOTICE, readMeetingSettings, writeMeetingSettings } from '../../../src/meeting-settings.ts';
-import { createSourceReader } from '../../../src/meeting-sources.ts';
+import { meetingProviderView } from '../../../src/meeting-runtime.ts';
+import { readProfileFile } from '../../../src/config.ts';
 import { toolSearchPath } from '../../../src/shell-path.ts';
 import type { Handlers } from '../bridge.ts';
 import type { HandlerContext } from './context.ts';
@@ -32,7 +33,8 @@ export const meetingsHandlers = (context: HandlerContext): Handlers<'meetings'> 
       writeMeetingSettings(context.profileDir(), enabled);
       return settings();
     },
-    sources: async () => createSourceReader({ path: await toolSearchPath() }).status(),
+    // The provider the jobs use (SERRA-63): the profile's worker, else T3's default. Never another one.
+    sources: async () => meetingProviderView({ path: await toolSearchPath(), worker: readProfileFile(context.profileDir()).worker ?? {} }),
     list: () => store().listMeetings(),
     history: () => store().history(),
     approve: (meeting, item, reviewed) => store().approve(id(meeting, 'Meeting'), id(item, 'Edit'), reviewedInput(reviewed)),

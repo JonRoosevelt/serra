@@ -47,6 +47,11 @@ export interface MeetingCaptureDeps {
   paused: () => boolean;
   /** Whether Serra has a job or a held request in this thread. */
   busy: (channel: string, threadTs: string) => boolean;
+  /**
+   * Why meetings can't run on the job provider now (SERRA-63), or null when they can. Checked before reading
+   * anything: an unsupported provider is refused plainly, never swapped for another.
+   */
+  ready?: () => string | null;
   store?: MeetingStore;
   now?: () => Date;
   log?: (message: string) => void;
@@ -219,6 +224,8 @@ export const createMeetingCapture = (deps: MeetingCaptureDeps) => {
     if (!fromOwner) return refuse(msg.user === deps.owner && !msg.automaticTrigger ? COPY.ownerElsewhere : COPY.notOwner(deps.owner));
     if (!enabled) return refuse(COPY.off);
     if (deps.paused()) return refuse(COPY.paused);
+    const notReady = deps.ready?.() ?? null;
+    if (notReady) return refuse(notReady);
     return {
       work: (async () => {
         // Slack's agent view: a DM conversation is a thread. Only one with nothing before the trigger may hold a meeting.

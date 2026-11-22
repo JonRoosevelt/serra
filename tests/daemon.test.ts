@@ -146,3 +146,16 @@ test('[SERRA-62] a meeting request held by an older Serra is dropped at start, n
   assert.equal(readHeld(h.config.profileDir).length, 0);
   assert.ok(h.slack.callsTo('chat.postMessage').some((call) => /Send it again/.test(String(call.text))));
 });
+
+test('[SERRA-63] meetings on a provider Serra can\'t run them on are refused in the DM, and never sent to another provider', async (t) => {
+  const prompts: string[] = [];
+  const h = await startTestDaemon(t, { meetings: {
+    extractor: { extract: async (prompt) => { prompts.push(prompt); return '<meeting-digest>{"items":[]}</meeting-digest>'; } },
+    ready: () => "Meetings can't run on Cursor yet, the provider your jobs use. Serra can't work with Cursor yet. Serra won't use another provider instead.",
+  } });
+  writeMeetingSettings(h.config.profileDir, true);
+  await h.deliver(dm('1700000500.000100', 'remember this meeting\nSam: we ship retries at 3.'));
+  assert.equal(prompts.length, 0, 'no extractor ran');
+  assert.equal(h.t3.started.length, 0, 'and no T3 thread');
+  assert.ok(h.slack.callsTo('chat.postMessage').some((call) => /can't run on Cursor yet.*won't use another provider/.test(String(call.text))));
+});

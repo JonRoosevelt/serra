@@ -30,8 +30,8 @@ import { jobCounts, startStatusServer, type StatusServer } from './status-socket
 import type { IncomingMessage } from './types.ts';
 import { readAttachmentText } from './slack/attachments.ts';
 import { createMeetingCapture, meetingsFirst, type MeetingCaptureDeps } from './meeting-capture.ts';
-import { createExtractor } from './meeting-extractor.ts';
-import { createSourceReader } from './meeting-sources.ts';
+import { meetingRuntime, unsupportedMeetings, type MeetingRuntime } from './meeting-runtime.ts';
+import { jobProvider, providerEntries, readT3Providers } from './providers.ts';
 import { toolSearchPath } from './shell-path.ts';
 
 const POLL_MS = 15_000;
@@ -64,8 +64,11 @@ export interface DaemonDeps {
   watchProfile?: boolean;
   pid?: number;
   pollMs?: number;
-  /** Meeting capture's model and provider seams (SERRA-62). Production runs Claude Code through the owner's PATH. */
-  meetings?: Partial<Pick<MeetingCaptureDeps, 'extractor' | 'sources' | 'readFile'>>;
+  /**
+   * Meeting capture's model and provider seams (SERRA-62, SERRA-63). Production runs on the job provider's own CLI
+   * (meeting-runtime.ts), found through the owner's PATH.
+   */
+  meetings?: Partial<Pick<MeetingCaptureDeps, 'extractor' | 'sources' | 'readFile' | 'ready'>>;
 }
 
 export interface Daemon {
@@ -149,14 +152,26 @@ export const startDaemon = async (deps: DaemonDeps): Promise<Daemon> => {
       bot.ownsThread(channel, threadTs) || heldIn(channel, threadTs) || (releasingNow?.channel === channel && releasingNow.threadTs === threadTs);
 
     // "Remember this meeting" in the owner's DM (SERRA-62): caught before the pause hold and before any job, so a
-    // transcript never reaches a T3 worker. Off until the owner turns it on in the app. One extractor per daemon,
-    // so its canary self-test runs once per Claude Code binary.
-    // Made on the first meeting, not at start: finding Claude Code asks the login shell.
-    let made: Promise<{ extractor: ReturnType<typeof createExtractor>; reader: ReturnType<typeof createSourceReader> }> | null = null;
-    const claude = () => (made ??= toolSearchPath().catch(() => process.env.PATH ?? '')
-      .then((path) => ({ extractor: createExtractor({ path }), reader: createSourceReader({ path }) })));
-    const extractor = deps.meetings?.extractor ?? { extract: async (prompt: string) => (await claude()).extractor.extract(prompt) };
-    const sources = deps.meetings?.sources ?? { fetchTranscript: async (link: Parameters<MeetingCaptureDeps['sources']['fetchTranscript']>[0]) => (await claude()).reader.fetchTranscript(link) };
+    // transcript never reaches a T3 worker. Off until the owner turns it on in the app. It runs on the provider the
+    // jobs use (SERRA-63), through that provider's own CLI, never another; one runtime per provider, binary and model,
+    // so each self-test runs once.
+    const worker = { ...(config.workerProvider ? { provider: config.workerProvider } : {}), ...(config.workerModel ? { model: config.workerModel } : {}) };
+    // Found on the first meeting, not at start: finding the CLIs asks the login shell.
+    let path: Promise<string> | null = null;
+    const runtimes = new Map<string, MeetingRuntime>();
+    const runtime = async (): Promise<MeetingRuntime> => {
+      const choice = meetingRuntime({ path: await (path ??= toolSearchPath().catch(() => process.env.PATH ?? '')), worker });
+      if (!choice.runtime) throw new Error(choice.unsupported);
+      const key = `${choice.runtime.provider.id}|${choice.runtime.provider.binaryPath ?? ''}|${worker.model ?? ''}`;
+      if (!runtimes.has(key)) runtimes.set(key, choice.runtime);
+      return runtimes.get(key)!;
+    };
+    const extractor = deps.meetings?.extractor ?? { extract: async (prompt: string) => (await runtime()).extract(prompt) };
+    const sources = deps.meetings?.sources ?? { fetchTranscript: async (link: Parameters<MeetingCaptureDeps['sources']['fetchTranscript']>[0]) => (await runtime()).fetchTranscript(link) };
+    const ready = deps.meetings?.ready ?? (() => {
+      const provider = jobProvider(providerEntries(readT3Providers(), worker.provider));
+      return provider?.adapter ? null : unsupportedMeetings(provider);
+    });
     const meetings = createMeetingCapture({
       profileDir: config.profileDir, knowledgeDir: config.knowledgeDir, owner: config.owner,
       chat: {
@@ -170,7 +185,7 @@ export const startDaemon = async (deps: DaemonDeps): Promise<Daemon> => {
         },
       },
       readFile: deps.meetings?.readFile ?? ((file, maxChars) => readAttachmentText(client, file, config.botToken, maxChars)),
-      sources, extractor,
+      sources, extractor, ready,
       paused: () => readPause(config.profileDir, clock.now()) !== null,
       busy: (channel, threadTs) => owns(channel, threadTs),
       now: () => new Date(clock.now()),

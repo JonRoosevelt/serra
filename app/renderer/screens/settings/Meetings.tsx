@@ -1,9 +1,12 @@
 // Settings › Meetings (SERRA-62): turn meeting capture on (acknowledging what's sent and kept), see which transcript
-// sources Claude Code can read now and what to do when one can't, and forget a meeting.
+// sources the job provider can read now and what to do when one can't, and forget a meeting. Meetings run on the
+// provider jobs use (SERRA-63); when Serra can't run them there, this screen says so and nothing runs elsewhere.
 import { useCallback, useEffect, useState, type ComponentProps, type ReactNode } from 'react';
-import { FileText, LoaderCircle, RefreshCw } from 'lucide-react';
+import { Bot, FileText, LoaderCircle, RefreshCw } from 'lucide-react';
 import type { MeetingSettings } from '../../../../src/meeting-settings.ts';
+import type { MeetingProviderView } from '../../../../src/meeting-runtime.ts';
 import type { MeetingProvider, ProviderStatus } from '../../../../src/meeting-sources.ts';
+import { providerBrand } from '../tools.logic.ts';
 import type { MeetingView } from '../../../../src/meeting-store.ts';
 import { serra } from '../../bridge.ts';
 import { Badge, Button, Dialog, Page, useToast } from '../../ui/index.ts';
@@ -58,7 +61,8 @@ const SourceRow = ({ icon, label, how, status }: { icon: ReactNode; label: strin
 export const Meetings = () => {
   const toast = useToast();
   const [settings, setSettings] = useState<(MeetingSettings & { notice: string }) | null>(null);
-  const [sources, setSources] = useState<ProviderStatus[] | null>(null);
+  const [view, setView] = useState<MeetingProviderView | null>(null);
+  const sources = view?.sources ?? null;
   const [checking, setChecking] = useState(false);
   const [history, setHistory] = useState<History>([]);
   const [error, setError] = useState<string | null>(null);
@@ -81,11 +85,11 @@ export const Meetings = () => {
     const bridge = serra();
     if (!bridge) return;
     setChecking(true);
-    try { setSources(await bridge.meetings.sources()); } catch (failure) { toast({ message: message(failure), tone: 'error' }); } finally { setChecking(false); }
+    try { setView(await bridge.meetings.sources()); } catch (failure) { toast({ message: message(failure), tone: 'error' }); } finally { setChecking(false); }
   }, [toast]);
 
   useEffect(() => { void load(); }, [load]);
-  useEffect(() => { if (settings?.enabled && sources === null) void check(); }, [settings?.enabled, sources, check]);
+  useEffect(() => { if (settings?.enabled && view === null) void check(); }, [settings?.enabled, view, check]);
 
   const setEnabled = async (enabled: boolean): Promise<void> => {
     const bridge = serra();
@@ -133,14 +137,30 @@ export const Meetings = () => {
       {settings?.enabled && (
         <Card
           title="Sources"
-          description="Serra reads Granola and Meet through your own Claude Code connections. It never holds their keys."
+          description="Meetings run on the provider your jobs use, through its own connections. Serra never holds their keys."
           actions={<Button size="sm" disabled={checking} icon={checking ? <LoaderCircle size={14} className="animate-spin" /> : <RefreshCw size={14} />} onClick={() => void check()}>Check</Button>}
         >
-          <ul className="flex flex-col divide-y divide-line">
+          {view && (
+            <div className="flex items-start gap-3 rounded-md border border-line px-3 py-2.5">
+              <ToolIcon brand={providerBrand(view.provider?.icon ?? 'bot')} fallback={<Bot size={14} />} label={view.provider?.label ?? 'Provider'} />
+              <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="text-sm font-medium">Runs on {view.provider?.label ?? 'an unknown provider'}</span>
+                  <Badge tone={view.unsupported ? 'warn' : view.extraction?.ok ? 'up' : 'warn'}>{view.unsupported ? 'Not supported yet' : view.extraction?.ok ? 'Ready' : 'Not ready'}</Badge>
+                </div>
+                <p className="text-[13px] text-muted">
+                  {view.unsupported ?? (view.extraction?.ok
+                    ? `${view.provider?.chosenBy === 't3-default' ? "T3's default provider" : 'Your worker provider'}, with no tools when it reads a transcript.`
+                    : view.extraction?.reason ?? '')}
+                </p>
+              </div>
+            </div>
+          )}
+          {!view?.unsupported && <ul className="flex flex-col divide-y divide-line">
             <SourceRow icon={<SourceIcon source="granola" />} label="Granola" how={PROVIDER_ROWS[0]!.how} status={statusOf('granola')} />
             <SourceRow icon={<SourceIcon source="google-meet" />} label="Google Meet" how={PROVIDER_ROWS[1]!.how} status={statusOf('google-meet')} />
             <SourceRow icon={<ToolIcon brand={null} fallback={<FileText size={14} />} label="File or text" />} label="File or pasted text" how="Attach a .txt, .md, .vtt or .srt export from any notetaker, or paste the summary." status={{ label: 'Ready', tone: 'up' }} />
-          </ul>
+          </ul>}
         </Card>
       )}
       {history.length > 0 && (

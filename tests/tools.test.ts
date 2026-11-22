@@ -49,7 +49,7 @@ const fixture = (t: TestContext) => {
   const profile = (overrides: Partial<Profile> = {}): Profile => ({
     version: 1, bot: { id: 'friday', name: 'Friday' }, owner: { name: 'Alex', slackUserId: 'U0123456789', githubLogin: 'alex' },
     project: { path: project, remote: 'origin', baseRef: 'origin/main', githubRepo: 'acme/project' }, allowedUsers: [],
-    worker: { provider: 'claude', model: 'opus' }, ...overrides,
+    worker: { provider: 'claudeAgent', model: 'opus' }, ...overrides,
   });
   return { root, home, project, profileDir, bin, write, install, profile };
 };
@@ -156,7 +156,8 @@ test('liveMcpOverview lists Claude from `claude mcp list`, connectors included, 
     f.profile({ messageTriggers: [{ channel: 'C0123456789', botId: 'B0123456789', instructions: 'Investigate this Sentry alert.' }] }),
     { home: f.home, env: {}, run, path: f.bin },
   );
-  assert.deepEqual(overview.listing, [{ driver: 'claude', method: 'cli', note: null }]);
+  assert.deepEqual(overview.listing.find((listing) => listing.driver === 'claude'), { driver: 'claude', method: 'cli', note: null });
+  assert.ok(overview.listing.some((listing) => listing.driver === 'codex'), 'Codex is a T3 provider Serra reads too');
   const byName = new Map(overview.servers.map((server) => [server.name, server]));
   assert.deepEqual([byName.get('claude.ai Gmail')!.scope, byName.get('claude.ai Gmail')!.health], ['connector', 'connected']);
   assert.deepEqual([byName.get('sentry')!.scope, byName.get('sentry')!.source, byName.get('sentry')!.host], ['user', '~/.claude.json', 'mcp.sentry.example']);
@@ -388,8 +389,9 @@ test('recommendationSignals: Sentry SDK, vercel.json, Jira and Linear links; a b
 // Screen logic
 // ---------------------------------------------------------------------------------------------------------------
 
+const claudeEntry = { id: 'claudeAgent', driver: 'claudeAgent', label: 'Claude', icon: 'claude', adapter: 'claude', jobs: true, chosenBy: 'profile', unsupported: null } as const;
 const emptyMcp = (overrides: Partial<McpOverview> = {}): McpOverview => ({
-  worker: { provider: 'claude', drivers: ['claude'], note: null }, servers: [], warnings: [], files: [],
+  worker: { provider: 'claudeAgent', drivers: ['claude'], note: null }, providers: [claudeEntry], servers: [], warnings: [], files: [],
   listing: [{ driver: 'claude', method: 'cli', note: null }], ...overrides,
 });
 

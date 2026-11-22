@@ -24,7 +24,7 @@ const setup = (t: TestContext) => {
   const profile: Profile = {
     version: 1, bot: { id: 'friday', name: 'Friday' }, owner: { name: 'Alex', slackUserId: 'U0123456789', githubLogin: 'alex' },
     project: { path: project, remote: 'origin', baseRef: 'origin/main', githubRepo: 'acme/project' }, allowedUsers: [],
-    worker: { provider: 'claude', model: 'opus' },
+    worker: { provider: 'claudeAgent', model: 'opus' },
     messageTriggers: [{ channel: 'C0123456789', botId: 'B0123456789', instructions: 'Investigate this Sentry alert.' }],
   };
   writeProfileFile(profileDir, profile);

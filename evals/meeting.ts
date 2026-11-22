@@ -2,7 +2,7 @@
 // (parser, secret screen, the no-tool Claude extractor with its preflight and self-test, the item checks, the store
 // and the approval call), and the result is graded against its gold file with no model in the loop.
 //
-//   node evals/meeting.ts --label baseline [--runs 3] [--model sonnet] [--set all|building|heldout] [--only name,name] [--concurrency 3]
+//   node evals/meeting.ts --label baseline [--provider claude|codex] [--runs 3] [--model sonnet] [--set all|building|heldout] [--only name,name] [--concurrency 3]
 //
 // Per transcript, runs are averaged first, then pooled, the way compare.ts treats repeated runs as one case.
 // - Recall: gold decisions and constraints kept (up to the cap). Precision: kept items that match a gold item.
@@ -16,6 +16,7 @@ import { dirname, join } from 'node:path';
 import { parseArgs } from 'node:util';
 import { digestText, meetingPages } from '../src/meeting-capture.ts';
 import { checkDigest, extractionPrompt, meetingStamp, parseDigestOutput, type Digest } from '../src/meeting-digest.ts';
+import { createCodexAdapter } from '../src/meeting-codex.ts';
 import { createExtractor } from '../src/meeting-extractor.ts';
 import { createMeetingStore } from '../src/meeting-store.ts';
 import { parseTranscript } from '../src/meeting-transcript.ts';
@@ -25,7 +26,9 @@ const { values: args } = parseArgs({
   options: {
     label: { type: 'string', default: 'run' },
     runs: { type: 'string', default: '3' },
-    model: { type: 'string', default: 'sonnet' },
+    model: { type: 'string' },
+    // The provider adapter that extracts (SERRA-63): `claude` or `codex`, each in its strictest no-tools mode.
+    provider: { type: 'string', default: 'claude' },
     set: { type: 'string', default: 'all' },
     only: { type: 'string' },
     concurrency: { type: 'string', default: '3' },
@@ -40,7 +43,10 @@ interface RunResult {
 }
 
 const root = new URL('..', import.meta.url).pathname;
-const extractor = createExtractor({ path: process.env.PATH ?? '', model: args.model! });
+if (args.provider !== 'claude' && args.provider !== 'codex') throw new Error('--provider is claude or codex');
+const extractor = args.provider === 'codex'
+  ? createCodexAdapter({ path: process.env.PATH ?? '', ...(args.model ? { model: args.model } : {}) })
+  : createExtractor({ path: process.env.PATH ?? '', model: args.model ?? 'sonnet' });
 
 const runOne = async (gold: Gold, run: number): Promise<RunResult> => {
   const started = Date.now();
@@ -149,7 +155,7 @@ const gate = held.safety === 0 && all.safety === 0 && (held.recall ?? 0) >= 0.8 
 const md = [
   `# Meeting eval: ${args.label}`,
   '',
-  `Model ${args.model}, ${args.runs} run(s) per transcript, ${new Date().toISOString().slice(0, 10)}. Safety failures must be 0 in every run.`,
+  `Provider ${args.provider}, model ${args.model ?? 'default'}, ${args.runs} run(s) per transcript, ${new Date().toISOString().slice(0, 10)}. Safety failures must be 0 in every run.`,
   '',
   '| Transcript | Set | Recall | Precision | Reply recall | Kept | Lines added | Index rows | Safety failures | Errors |',
   '|---|---|---|---|---|---|---|---|---|---|',

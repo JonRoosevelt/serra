@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import test, { type TestContext } from 'node:test';
 import type { Profile } from '../src/config.ts';
-import { formatMcpOverview, mcpOverview, parseCodexServers, requiredTools, workerDrivers } from '../src/mcp.ts';
+import { formatMcpOverview, mcpOverview, parseCodexServers, requiredTools, workerProviders } from '../src/mcp.ts';
 
 const TOKEN = 'sntrys_fixture-secret-value';
 const HEADER = `Bearer ${TOKEN}`;
@@ -25,7 +25,7 @@ const fixture = (t: TestContext) => {
   const profile = (overrides: Partial<Profile> = {}): Profile => ({
     version: 1, bot: { id: 'friday', name: 'Friday' }, owner: { name: 'Alex', slackUserId: 'U0123456789', githubLogin: 'alex' },
     project: { path: project, remote: 'origin', baseRef: 'origin/main', githubRepo: 'acme/project' }, allowedUsers: [],
-    worker: { provider: 'claude', model: 'opus' }, messageTriggers: [SENTRY_ALERT], ...overrides,
+    worker: { provider: 'claudeAgent', model: 'opus' }, messageTriggers: [SENTRY_ALERT], ...overrides,
   });
   const overview = (profileValue = profile()) => mcpOverview(profileValue, { home, env: {} });
   return { home, project, write, profile, overview };
@@ -42,7 +42,8 @@ test('a Sentry alert trigger with a Sentry server for Claude has no warning, and
     },
   });
   const overview = f.overview();
-  assert.deepEqual(overview.worker.drivers, ['claude']);
+  assert.deepEqual(overview.worker.drivers, ['claude', 'codex'], 'every T3 provider Serra can read is listed');
+  assert.equal(overview.providers.find((entry) => entry.jobs)?.id, 'claudeAgent');
   assert.deepEqual(overview.warnings, []);
   const sentry = overview.servers.find((server) => server.name === 'sentry')!;
   assert.deepEqual(sentry, {
@@ -149,28 +150,55 @@ test('a Codex worker reads only Codex config, and a turned-off Codex server warn
     '[mcp_servers.sentry.env]', `SENTRY_TOKEN = "${TOKEN}"`,
   ].join('\n'));
   const overview = f.overview(f.profile({ worker: { provider: 'codex', model: 'gpt' } }));
-  assert.deepEqual(overview.worker.drivers, ['codex']);
-  assert.deepEqual(overview.servers.map((server) => [server.driver, server.name, server.load]), [['codex', 'sentry', 'disabled']]);
-  assert.equal(overview.warnings.length, 1);
+  assert.deepEqual(overview.servers.filter((server) => server.driver === 'codex').map((server) => [server.driver, server.name, server.load]), [['codex', 'sentry', 'disabled']]);
+  assert.equal(overview.warnings.length, 1, "only the job provider's servers are warned about");
   assert.match(overview.warnings[0]!.text, /Sentry MCP server for Codex \(sentry\) is turned off/);
   assert.ok(!JSON.stringify(overview).includes(TOKEN));
 });
 
-test('without a worker provider both kinds are listed and each is checked', (t) => {
+test('without a worker provider, jobs run on T3\'s default, and only its servers are checked', (t) => {
   const f = fixture(t);
   f.write(join(f.home, '.claude.json'), { mcpServers: { sentry: sentryHttp } });
+  f.write(join(f.home, '.t3', 'userdata', 'settings.json'), { defaultModelSelection: { instanceId: 'codex', model: 'gpt' } });
   const overview = f.overview(f.profile({ worker: undefined }));
-  assert.deepEqual(overview.worker.drivers, ['claude', 'codex']);
-  assert.match(overview.worker.note!, /both Claude and Codex/);
+  assert.deepEqual(overview.worker.drivers, ['codex', 'claude'], "the job provider's kind first");
+  const job = overview.providers.find((entry) => entry.jobs)!;
+  assert.deepEqual([job.id, job.chosenBy], ['codex', 't3-default']);
   assert.deepEqual(overview.warnings.map((warning) => warning.driver), ['codex']);
 });
 
-test('workerDrivers maps provider instance names to their kind', () => {
-  assert.deepEqual(workerDrivers('claudeAgent').drivers, ['claude']);
-  assert.deepEqual(workerDrivers('codex-work').drivers, ['codex']);
-  const unknown = workerDrivers('custom');
-  assert.deepEqual(unknown.drivers, ['claude', 'codex']);
-  assert.match(unknown.note!, /"custom"/);
+test('without a worker provider or a T3 default, Serra says it can\'t tell instead of guessing', (t) => {
+  const f = fixture(t);
+  const overview = f.overview(f.profile({ worker: undefined }));
+  assert.equal(overview.providers.some((entry) => entry.jobs), false);
+  assert.match(overview.worker.note!, /can't tell which one jobs use/);
+  assert.deepEqual(overview.warnings, []);
+});
+
+test('providers come from T3: instances resolve through its settings, unknown ids and kinds are never guessed', (t) => {
+  const f = fixture(t);
+  f.write(join(f.home, '.t3', 'userdata', 'settings.json'), { providerInstances: {
+    'codex-work': { driver: 'codex' }, claudeAgent: { driver: 'claudeAgent', config: { binaryPath: '/opt/claude' } },
+    'claude-home': { driver: 'claudeAgent', config: { homePath: '/elsewhere' } }, nova: { driver: 'nova' },
+  } });
+  const options = { home: f.home, env: {} };
+  const work = workerProviders('codex-work', options).providers.find((entry) => entry.id === 'codex-work')!;
+  assert.deepEqual([work.adapter, work.label, work.jobs], ['codex', 'Codex (codex-work)', true]);
+  assert.equal(workerProviders(undefined, options).providers.find((entry) => entry.id === 'claudeAgent')!.binaryPath, '/opt/claude');
+  // A name that looks like Claude or Codex but isn't a T3 instance is unknown, not guessed.
+  for (const name of ['claude', 'my-codex', 'custom']) {
+    const { worker, providers } = workerProviders(name, options);
+    const job = providers.find((entry) => entry.jobs)!;
+    assert.deepEqual([job.id, job.adapter, job.driver], [name, null, null], name);
+    assert.match(worker.note!, new RegExp(`"${name}"`));
+  }
+  const all = workerProviders(undefined, options).providers;
+  const byId = (id: string) => all.find((entry) => entry.id === id)!;
+  assert.match(byId('cursor').unsupported!, /Serra can't work with Cursor yet/);
+  assert.match(byId('antigravity').unsupported!, /Antigravity/);
+  assert.match(byId('nova').unsupported!, /doesn't know T3's "nova" provider/);
+  assert.match(byId('claude-home').unsupported!, /can't follow this instance's T3 settings \(homePath\)/);
+  assert.equal(byId('claude-home').adapter, null, 'its MCP config is somewhere Serra would have to guess');
 });
 
 test('an unreadable config is reported as a file problem without its content or the parser message', (t) => {
