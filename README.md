@@ -1,0 +1,1 @@
+Screenshots for the update timeout and polish PR (SERRA-73). Taken from the dev app with a scratch HOME, a copy of the QA profile (fake jobs and placeholder tokens) and a local fake update feed; no real workspace.
