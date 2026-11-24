@@ -95,6 +95,38 @@ test('blocks: a rule of dashes is quiet, and blank input gives no blocks', () =>
   assert.deepEqual(pageBlocks('\n\n'), []);
 });
 
+test('spans: only http and https become links, other schemes stay as written', () => {
+  assert.deepEqual(inlineSpans('[x](javascript:alert(1))'), [{ kind: 'text', text: '[x](javascript:alert(1))' }]);
+  assert.deepEqual(inlineSpans('<mailto:you@example.com>'), [{ kind: 'text', text: '<mailto:you@example.com>' }]);
+  assert.deepEqual(inlineSpans('[docs](https://example.com/a)'), [
+    { kind: 'link', text: 'docs', href: 'https://example.com/a' },
+  ]);
+  assert.deepEqual(inlineSpans('see <http://example.com> now'), [
+    { kind: 'text', text: 'see ' },
+    { kind: 'link', text: 'http://example.com', href: 'http://example.com' },
+    { kind: 'text', text: ' now' },
+  ]);
+});
+
+test('spans: a dunder is an identifier, not bold markup', () => {
+  assert.deepEqual(inlineSpans('call __init__ first'), [{ kind: 'text', text: 'call __init__ first' }]);
+  assert.deepEqual(inlineSpans('__do this__'), [{ kind: 'bold', text: 'do this' }]);
+});
+
+test('blocks: a fenced code block keeps its lines verbatim, markup-shaped or not', () => {
+  assert.deepEqual(pageBlocks('before\n```bash\n# not a heading\n- not a bullet\n| not | a table |\n```\nafter'), [
+    { kind: 'text', spans: [{ kind: 'text', text: 'before' }] },
+    { kind: 'fence', text: '# not a heading\n- not a bullet\n| not | a table |' },
+    { kind: 'text', spans: [{ kind: 'text', text: 'after' }] },
+  ]);
+});
+
+test('blocks: an unterminated fence runs to the end of the text', () => {
+  assert.deepEqual(pageBlocks('```\nfirst\nsecond'), [
+    { kind: 'fence', text: 'first\nsecond' },
+  ]);
+});
+
 test('blocks: a page as a worker gets it parses whole, headings to tables', () => {
   const body = [
     '# The role (Engagement)',
