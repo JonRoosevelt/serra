@@ -51,6 +51,8 @@ interface RunThread {
   activeRunId: string | null;
   /** Questions or approvals the run waits on. */
   pendingRequestCount?: number;
+  /** Why the latest run failed, as a plain sentence a backend made (never the agent's own text). */
+  error?: string;
 }
 
 interface RunMessage {

@@ -280,7 +280,7 @@ export const createMeetingRuns = ({
     }
     if (outcome.kind === 'timeout') throw new Error(`The ${backend.label} run took too long. ${await stop(backend, threadId, thread.link)}`);
     if (contents().length) throw new Error(`The ${backend.label} run wrote files in Serra's meetings folder, so its answer was thrown away. Serra moved them to ${tilde(moveAside())}.`);
-    if (!outcome.answer) throw new Error(`The ${backend.label} run ended without an answer (status: ${thread.status}).`);
+    if (!outcome.answer) throw new Error(thread.error ? `The ${backend.label} run failed: ${thread.error}` : `The ${backend.label} run ended without an answer (status: ${thread.status}).`);
     return { runId: outcome.runId, answer: outcome.answer };
   };
 

@@ -38,6 +38,8 @@ export interface AcpBackendOptions {
   /** Starts the agent; a test passes a fake agent's command. */
   spawnAgent?: (agent: AcpAgent, env: NodeJS.ProcessEnv) => ChildProcess;
   log?: (message: string) => void;
+  /** MCP servers handed to every session, on top of the agent's own configuration. None by default: the agent's own connections are used, as in T3. */
+  mcpServers?: acp.McpServer[];
 }
 
 interface ToolRecord { id: string; runId: string; title: string; kind: string | null; status: string | null; rawInput: unknown; rawOutput: unknown; content: unknown }
@@ -55,6 +57,8 @@ interface Session {
   tools: Map<string, ToolRecord>;
   queue: string[];
   readOnly: boolean;
+  /** What the running turn cost so far, as the agent reports it. */
+  cost: { amount: number; currency: string } | null;
 }
 
 /** Modes in which an agent uses tools without asking. */
@@ -69,6 +73,20 @@ const askingMode = (modes: acp.SessionModeState, readOnly: boolean): string | nu
   if (readOnly && readOnlyMode) return readOnlyMode.id;
   if (!PERMISSIVE.test(modes.currentModeId)) return modes.currentModeId;
   return modes.availableModes.find((choice) => /^(default|manual|ask)$/i.test(choice.id))?.id ?? null;
+};
+
+/**
+ * Why a turn failed, as a fixed sentence: the adapter's error kind or ACP's auth error, never the agent's own text
+ * (it can quote the brief, which may hold a transcript).
+ */
+const turnFailure = (error: unknown, name: string): string => {
+  const record = typeof error === 'object' && error !== null ? (error as { code?: unknown; data?: unknown }) : {};
+  const kind = typeof record.data === 'object' && record.data !== null && 'errorKind' in record.data ? String(record.data.errorKind) : null;
+  if (record.code === -32000 || kind === 'authentication_failed') return `${name} needs you to sign in. Sign in with its own CLI, then try again.`;
+  if (kind === 'rate_limit') return `${name} hit its usage or rate limit. Try again later.`;
+  if (kind === 'billing_error') return `${name}'s account has a billing problem. Check it in ${name}.`;
+  if (kind === 'server_error' || kind === 'transport_lost') return `${name} lost its connection to its provider. Try again.`;
+  return `${name} stopped with an error${kind ? ` (${kind})` : ''}.`;
 };
 
 const textOf = (content: acp.ContentBlock): string => (content.type === 'text' ? content.text : '');
@@ -103,8 +121,16 @@ const signal = (running: ChildProcess, name: NodeJS.Signals): void => {
   running.kill(name);
 };
 
-export const createAcpBackend = ({ agent, env = async () => process.env, worktreeRoot, spawnAgent = defaultSpawn, log = () => {} }: AcpBackendOptions): AgentBackend => {
+export const createAcpBackend = ({ agent, env = async () => process.env, worktreeRoot, spawnAgent = defaultSpawn, log = () => {}, mcpServers = [] }: AcpBackendOptions): AgentBackend => {
   const sessions = new Map<string, Session>();
+  /** Bumped whenever a turn ends or a request is refused, so a wait reads at once instead of on its next poll. */
+  let version = 0;
+  const waiters = new Set<() => void>();
+  const changed = (): void => {
+    version += 1;
+    for (const wake of waiters) wake();
+    waiters.clear();
+  };
   let child: ChildProcess | null = null;
   let connection: Promise<acp.ClientConnection> | null = null;
   let stderr = '';
@@ -123,6 +149,7 @@ export const createAcpBackend = ({ agent, env = async () => process.env, worktre
       current.active = null;
       current.queue = [];
     }
+    changed();
   };
 
   const app = acp.client({ name: 'serra' })
@@ -133,6 +160,7 @@ export const createAcpBackend = ({ agent, env = async () => process.env, worktre
       const runId = current.active ?? `run-${current.runs}`;
       // Serra keeps the reply and the tool calls; plans, thoughts, modes and usage it doesn't need.
       if (update.sessionUpdate === 'agent_message_chunk') current.reply += textOf(update.content);
+      else if (update.sessionUpdate === 'usage_update' && update.cost) current.cost = { amount: update.cost.amount, currency: update.cost.currency };
       else if (update.sessionUpdate === 'tool_call') {
         current.tools.set(update.toolCallId, { id: update.toolCallId, runId, title: update.title, kind: update.kind ?? null, status: update.status ?? null, rawInput: update.rawInput, rawOutput: update.rawOutput, content: update.content });
       } else if (update.sessionUpdate === 'tool_call_update') {
@@ -151,7 +179,7 @@ export const createAcpBackend = ({ agent, env = async () => process.env, worktre
       const allow = current !== undefined && !current.readOnly && ALLOWED_KINDS.has(kind);
       const option = params.options.find((choice) => choice.kind === (allow ? 'allow_once' : 'reject_once'))
         ?? (allow ? undefined : params.options.find((choice) => choice.kind === 'reject_always'));
-      if (!allow && current) current.refused += 1;
+      if (!allow && current) { current.refused += 1; changed(); }
       log(`${agent.name} asked to use ${params.toolCall.title ?? kind} (${kind}): ${allow ? 'allowed once' : 'refused'}.`);
       return option ? { outcome: { outcome: 'selected', optionId: option.optionId } } : { outcome: { outcome: 'cancelled' } };
     });
@@ -209,6 +237,7 @@ export const createAcpBackend = ({ agent, env = async () => process.env, worktre
     current.active = runId;
     current.reply = '';
     current.failed = null;
+    current.cost = null;
     current.messages.push({ role: 'user', runId, text });
     void (async () => {
       try {
@@ -216,12 +245,14 @@ export const createAcpBackend = ({ agent, env = async () => process.env, worktre
         const done = await open.agent.request(acp.methods.agent.session.prompt, { sessionId: current.sessionId, prompt: [{ type: 'text', text }] });
         if (done.stopReason !== 'end_turn') log(`${agent.name}'s turn ${runId} ended: ${done.stopReason}.`);
       } catch (error) {
-        current.failed = plain(error).message;
+        current.failed = exited ?? turnFailure(error, agent.name);
         log(`${agent.name}'s turn ${runId} failed: ${current.failed}`);
       }
       if (current.active !== runId) return;
+      if (current.cost) log(`${agent.name}'s turn ${runId} cost ${current.cost.amount.toFixed(4)} ${current.cost.currency}.`);
       if (current.reply) current.messages.push({ role: 'assistant', runId, text: current.reply });
       current.active = null;
+      changed();
       const next = current.queue.shift();
       if (next !== undefined) turn(current, next);
     })();
@@ -235,7 +266,7 @@ export const createAcpBackend = ({ agent, env = async () => process.env, worktre
     let open: acp.ClientConnection;
     try {
       open = await connect();
-      created = await open.agent.request(acp.methods.agent.session.new, { cwd, mcpServers: [] });
+      created = await open.agent.request(acp.methods.agent.session.new, { cwd, mcpServers });
     } catch (error) { throw plain(error); }
     const { sessionId } = created;
     // Serra's permission answers only hold if the agent asks. An agent may start in the owner's own mode that never
@@ -258,7 +289,7 @@ export const createAcpBackend = ({ agent, env = async () => process.env, worktre
           .catch((error: unknown) => log(`${agent.name} kept its own model: ${plain(error).message}`));
       } else log(`${agent.name} offers no model choice over ACP; it uses its own default.`);
     }
-    const current: Session = { sessionId, runs: 0, active: null, refused: 0, failed: null, messages: [], reply: '', tools: new Map(), queue: [], readOnly: input.readOnly === true };
+    const current: Session = { sessionId, runs: 0, active: null, refused: 0, failed: null, messages: [], reply: '', tools: new Map(), queue: [], readOnly: input.readOnly === true, cost: null };
     sessions.set(sessionId, current);
     turn(current, input.brief);
     return sessionId;
@@ -271,6 +302,7 @@ export const createAcpBackend = ({ agent, env = async () => process.env, worktre
       thread: {
         threadId, link: '', status: current.active ? 'running' : current.failed ? 'failed' : 'idle',
         latestRunId: latest, activeRunId: current.active, pendingRequestCount: current.refused,
+        ...(current.failed && !current.active ? { error: current.failed } : {}),
       },
       messages: current.messages.slice(-messages).map((message) => ({ ...message })),
     };
@@ -300,7 +332,16 @@ export const createAcpBackend = ({ agent, env = async () => process.env, worktre
       await (await connection).agent.notify(acp.methods.agent.session.cancel, { sessionId: current.sessionId });
     },
     read,
-    wait: (threadId, options) => pollUntilSettled(read, threadId, options),
+    // Polling stays the contract; a turn ending or a refusal wakes the wait at once, so a run isn't left a poll late.
+    wait: (threadId, options) => {
+      let seen = -1;
+      const wake = async (ms: number): Promise<void> => {
+        if (version !== seen) { seen = version; return; }
+        await Promise.race([options.sleep(ms), new Promise<void>((resolve) => { waiters.add(resolve); })]);
+        seen = version;
+      };
+      return pollUntilSettled(read, threadId, { ...options, sleep: wake });
+    },
     // Runs live in this process: there's nothing to find after a crash.
     list: async () => [],
     settle: async (threadId) => { sessions.delete(threadId); },

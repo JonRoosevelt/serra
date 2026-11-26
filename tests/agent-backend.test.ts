@@ -282,6 +282,20 @@ test('ACP: meeting runs work on an ACP agent: read-only extraction, and a link r
   await assert.rejects(asking.ask('t', 'ASK:execute'), /The Fake Agent run stopped to ask for approval or a question.*Serra stopped it in Fake Agent\./);
 });
 
+test('ACP: a failed turn says why in a fixed sentence (usage limit, sign-in), never the agent\'s text, and a wait wakes as soon as a turn ends', async (t) => {
+  const fake = fakeAcp(t);
+  const workspace = join(fake.dir, 'meetings');
+  const runs = createMeetingRuns({ t3Bin: '/Users/you/.t3/bin/t3', workspace, pollMs: 60_000, backend: () => fake.backend() });
+  await assert.rejects(runs.ask('t', 'FAIL:rate_limit'), (error: Error) => /The Fake Agent run failed: Fake Agent hit its usage or rate limit\. Try again later\./.test(error.message) && !error.message.includes('SECRET'));
+  await assert.rejects(runs.ask('t', 'FAIL:authentication_failed'), /needs you to sign in/);
+  assert.ok(!fake.logs.some((line) => line.includes('SECRET')), 'nor in the log');
+  // pollMs is a minute: the answer still comes back as soon as the turn ends.
+  const started = Date.now();
+  fake.reply('quick', 3);
+  assert.equal(await runs.ask('t', 'hello'), 'quick');
+  assert.ok(Date.now() - started < 10_000, `took ${Date.now() - started} ms`);
+});
+
 test('the agent backend choice: T3 until the owner picks an installed ACP agent; agents the owner adds keep their env out of the picker', (t) => {
   const dir = mkdtempSync(join(tmpdir(), 'serra-agent-choice-'));
   t.after(() => rmSync(dir, { recursive: true, force: true }));

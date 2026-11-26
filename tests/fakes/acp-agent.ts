@@ -2,7 +2,7 @@
 // test playing the model. Each prompt turn (numbered across processes) waits for the test to write `turn-<n>` in FAKE_ACP_DIR, then streams that
 // file's text as the reply. A prompt with `ASK:<kind>` first asks permission for a tool of that kind, and writes the
 // answer to `permission-<n>`. A prompt with `TOOL:<id>` records a tool call that read meeting <id>. A cancel ends the
-// running turn with `cancelled`. Run: node tests/fakes/acp-agent.ts
+// running turn with `cancelled`. `FAIL:<kind>` fails the turn with that error kind. Run: node tests/fakes/acp-agent.ts
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { Readable, Writable } from 'node:stream';
@@ -44,6 +44,9 @@ const app = acp.agent({ name: 'fake-acp' })
     const turn = next('turn');
     cancelled.delete(params.sessionId);
     const text = params.prompt.map((block) => (block.type === 'text' ? block.text : '')).join('');
+    // FAIL:<kind> fails the turn the way Claude Code's adapter does, with its error kind and raw text that quotes the brief.
+    const fail = /FAIL:(\w+)/.exec(text)?.[1];
+    if (fail) throw acp.RequestError.internalError({ errorKind: fail }, `SECRET-TRANSCRIPT ${text.slice(0, 40)}`);
     const ask = /ASK:(\w+)/.exec(text)?.[1];
     if (ask) {
       const answer = await client.request(acp.methods.client.session.requestPermission, {
