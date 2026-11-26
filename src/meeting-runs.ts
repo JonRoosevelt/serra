@@ -313,11 +313,13 @@ export const createMeetingRuns = ({
     if (brief.length > BRIEF_MAX_CHARS) throw new Error('That transcript is too long for one T3 run. Split it, or send the meeting\'s summary instead.');
     if (contents().length) log(`Serra's meetings folder had files in it, left by an earlier run. Moved them to ${moveAside()}.`);
     const opened: { session: Promise<T3Session> | null } = { session: null };
+    let started: string | null = null;
     const session = (): Promise<T3Session> => (opened.session ??= t3.session());
     try {
       await t3.ensureProject(workspace, PROJECT_TITLE, t3Bin);
       const input: FolderThreadInput = { project: workspace, title, brief, ...(provider ? { provider } : {}), ...(model ? { model } : {}) };
       const threadId = guarded ? await launchGuarded(await session(), title, brief) : await t3.startFolderThread(input, t3Bin);
+      if (guarded) started = threadId;
       const first = await finish(session, threadId, null);
       const ask = async (message: string): Promise<string> => {
         await (await session()).call('t3_thread_send', { threadId, message, mode: 'queue' });
@@ -326,6 +328,14 @@ export const createMeetingRuns = ({
       const { runId, answer } = first;
       return await use({ threadId, runId, answer, session, ask });
     } finally {
+      // A guarded run is Serra's own housekeeping: once its answer is read it's settled, so T3's thread list stays the
+      // owner's. Settling is reversible. A run that is still going (given up on) is stopped above first.
+      if (started && opened.session) {
+        const threadId = started;
+        await opened.session.then((open) => open.call('t3_thread_organize', { threadId, action: 'settle' }), () => null).catch((error: unknown) => {
+          log(`Couldn't settle T3 run ${threadId}: ${error instanceof Error ? error.message : String(error)}`);
+        });
+      }
       if (opened.session) await opened.session.then((open) => open.close(), () => {});
     }
   };
@@ -378,6 +388,11 @@ export const createMeetingRuns = ({
       }),
     /** Pick the decisions out of a (redacted) transcript, in a guarded T3 run briefed to use no tools. */
     extract: (prompt: string): Promise<string> => withRun('Serra meeting: pick out decisions', extractBrief(prompt), true, async ({ answer }) => answer),
+    /**
+     * Any other read-only question Serra asks a model, such as the weekly knowledge review: a guarded T3 run in the same
+     * empty folder, briefed to use no tools, answering only from the text it is given.
+     */
+    ask: (title: string, prompt: string): Promise<string> => withRun(title, [READ_ONLY, '- Use no tools at all. Answer only from the text in this message.', '', prompt].join('\n'), true, async ({ answer }) => answer),
     /** The owner's Test button: ask a guarded T3 run whether it could read this source. Only ever on that button. */
     checkSource: (source: MeetingProvider): Promise<ProviderStatus> =>
       withRun(`Serra meeting: check ${PROVIDERS[source].label}`, checkBrief(source), true, async ({ answer, ask }) => {

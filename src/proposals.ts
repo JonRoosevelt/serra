@@ -8,7 +8,7 @@ import { insideKnowledge, knowledgePagePath, offlimitsBudgetAfter } from './know
 import { createJournal } from './knowledge-journal.ts';
 import { withKnowledgeLock } from './knowledge-lock.ts';
 import { isArrayOf, isBoolean, isOneOf, isOptional, isRecord, isString, isStringOrNull, readJsonFile, readJsonOrNull } from './lib/guards.ts';
-import { alignHeader, DATE, frontmatter, INDEX_MAX_LINES, isOfflimits, lineCount, NOT_PAGES, pageProblems, PROPOSALS_DIR, removeHeaderField, setHeaderField } from './knowledge-rules.ts';
+import { alignHeader, ARCHIVE_DIR, DATE, frontmatter, INDEX_MAX_LINES, isOfflimits, lineCount, NOT_PAGES, pageProblems, PROPOSALS_DIR, removeHeaderField, setHeaderField } from './knowledge-rules.ts';
 
 /**
  * The owner's review queue for `knowledge/proposals/`: list, read, promote, merge, discard and undo.
@@ -25,7 +25,7 @@ const NOT_PROPOSALS = new Set(['README.md', 'onboarding-progress.md']);
 /** Leading `YYYY-MM-DD-` of a proposal's file name. */
 const DATED_NAME = /^(\d{4}-\d{2}-\d{2})-(.+)$/;
 
-export type ProposalAction = 'promote' | 'merge' | 'discard';
+export type ProposalAction = 'promote' | 'merge' | 'discard' | 'retire';
 
 /** One file a change touched. `null` means the file did not exist (before) or was removed (after). */
 export interface FileChange {
@@ -71,12 +71,12 @@ const isFileChange = (value: unknown): value is FileChange =>
 
 /** A backup's `change.json` with everything undo reads. */
 const isProposalChange = (value: unknown): value is ProposalChange =>
-  isRecord(value) && isString(value.id) && isOneOf('promote', 'merge', 'discard')(value.action) && isString(value.at)
+  isRecord(value) && isString(value.id) && isOneOf('promote', 'merge', 'discard', 'retire')(value.action) && isString(value.at)
   && isString(value.proposal) && isStringOrNull(value.page) && isArrayOf(isFileChange)(value.files) && isOptional(isString)(value.undoneAt);
 
 /** A folder's `.from.json` stamp. */
 const isProposalSource = (value: unknown): value is ProposalSource =>
-  isRecord(value) && isString(value.who) && isBoolean(value.owner) && isOneOf('slack', 'app')(value.via) && isOptional(isString)(value.link);
+  isRecord(value) && isString(value.who) && isBoolean(value.owner) && isOneOf('slack', 'app', 'review')(value.via) && isOptional(isString)(value.link);
 
 /** What the owner was shown when they approved: the proposal's text, and which page it changes and its text then. */
 export interface Reviewed {
@@ -272,6 +272,17 @@ export const createProposals = ({ knowledgeDir, backupDir, now = () => new Date(
     };
   };
 
+  /**
+   * The `verified` date an approved page gets: today, except for a weekly-review rewrite of an existing page. That
+   * rewrite only moved rules the owner's pages already held, so the page keeps its own date: re-dating it would let a
+   * rule the review left alone look newer than a later page that changed it.
+   */
+  const approvedOn = (id: string, current: string | null, at: string): string => {
+    if (describe(id).from?.via !== 'review' || current === null) return at;
+    const date = frontmatter(current)?.get('verified')?.trim() ?? '';
+    return DATE.test(date) ? date : at;
+  };
+
   const proposalIds = (relativeDir = ''): string[] => {
     const dir = join(proposalsRoot, relativeDir);
     if (!existsSync(dir)) return [];
@@ -387,7 +398,7 @@ export const createProposals = ({ knowledgeDir, backupDir, now = () => new Date(
     const at = today(now());
     // The text the owner reviewed, which checkReviewed found unchanged: not a second read that could differ.
     const proposed = reviewed.proposal;
-    const verifiedPage = removeHeaderField(setHeaderField(proposed, 'verified', at), 'target');
+    const verifiedPage = removeHeaderField(setHeaderField(proposed, 'verified', approvedOn(id, current, at)), 'target');
     // Replacing a page never quietly changes who may hear it: the owner's pick, else the page's own, else (a new page)
     // the proposal's. A proposal can ask for a wider audience, but only the owner grants it.
     const page = withAudience(verifiedPage, audience, proposed, current);
@@ -441,7 +452,7 @@ export const createProposals = ({ knowledgeDir, backupDir, now = () => new Date(
     const page = text ?? removeHeaderField(proposed, 'target');
     // The page keeps where every rule came from: the old page's sources, then the new text's and the proposal's.
     const sources = [...new Set([...sourceItems(current), ...sourceItems(page), ...sourceItems(proposed)])];
-    const withSources = setHeaderField(addSources(withoutSources(page.endsWith('\n') ? page : `${page}\n`), sources), 'verified', at);
+    const withSources = setHeaderField(addSources(withoutSources(page.endsWith('\n') ? page : `${page}\n`), sources), 'verified', approvedOn(id, current, at));
     // A merge never quietly changes who may hear the page: the owner's pick, else the page's own, else the merged text's.
     const merged = withAudience(withSources, audience, proposed, current);
     const budget = isOfflimits(target, frontmatter(merged)) ? offlimitsBudgetAfter(root, target, merged) : null;
@@ -453,6 +464,64 @@ export const createProposals = ({ knowledgeDir, backupDir, now = () => new Date(
       { path: target, before: current, after: merged },
       logLine(at, `merged \`${source}\` into \`${target}\`, confirmed by the owner in the app.`),
       { path: source, before: proposed, after: null },
+    ]);
+  });
+
+  /**
+   * Take a page out of what the bot knows, as the owner chose in the app: it moves to `archive/` (kept, never read by a
+   * worker), its index row goes, and the log says so. Undo puts it back. Refused when the page changed since the owner
+   * looked at it, or outside Serra. This is how a duplicate page, or one a merge made redundant, leaves.
+   */
+  const retirePage = (path: string, { reviewed }: { reviewed: string }): ProposalChange => withKnowledgeLock(root, () => {
+    const page = pagePath(path, 'Page');
+    const current = readText(page);
+    if (current === null) throw new Error(`No page ${page} in knowledge/.`);
+    if (current !== reviewed) throw new Error(`${page} changed since you looked at it. Look at it again.`);
+    const archived = `${ARCHIVE_DIR}/${page}`;
+    const indexBefore = readText('index.md');
+    if (indexBefore === null) throw new Error('knowledge/index.md is missing.');
+    const indexAfter = indexBefore.split('\n').filter((line) => !(line.trim().startsWith('|') && line.includes(`\`${page}\``))).join('\n');
+    checkNoDrift([page, 'index.md']);
+    const at = today(now());
+    return apply('retire', page, page, [
+      { path: page, before: current, after: null },
+      { path: archived, before: readText(archived), after: current },
+      ...(indexAfter === indexBefore ? [] : [{ path: 'index.md', before: indexBefore, after: indexAfter }]),
+      logLine(at, `retired \`${page}\` to \`${archived}\`, confirmed by the owner in the app.`),
+    ]);
+  });
+
+  /** Pages retired to `archive/`, with each one's description, for the app's Archived list. */
+  const listArchived = (): { path: string; description: string }[] => {
+    const dir = join(root, ARCHIVE_DIR);
+    const walk = (relativeDir: string): string[] => readdirSync(join(dir, relativeDir), { withFileTypes: true }).flatMap((entry) => {
+      const path = relativeDir ? `${relativeDir}/${entry.name}` : entry.name;
+      return entry.isDirectory() ? walk(path) : entry.name.endsWith('.md') ? [path] : [];
+    });
+    return existsSync(dir) ? walk('').sort().map((path) => ({ path, description: frontmatter(readFileSync(join(dir, path), 'utf8'))?.get('description')?.trim() ?? '' })) : [];
+  };
+
+  /**
+   * Bring a retired page back: it moves from `archive/` to where it was, gets an index row again (its description), and
+   * the log says so. Refused when a page has taken its place since.
+   */
+  const restorePage = (path: string): ProposalChange => withKnowledgeLock(root, () => {
+    const page = pagePath(path, 'Page');
+    const archived = `${ARCHIVE_DIR}/${page}`;
+    const text = readText(archived);
+    if (text === null) throw new Error(`${page} isn't in the archive.`);
+    if (readText(page) !== null) throw new Error(`${page} exists again; it can't be restored over it.`);
+    const indexBefore = readText('index.md');
+    if (indexBefore === null) throw new Error('knowledge/index.md is missing.');
+    const description = frontmatter(text)?.get('description')?.trim() || page;
+    const indexAfter = indexBefore.includes(`\`${page}\``) ? indexBefore : `${indexBefore.trimEnd()}\n| ${cell(description)} | \`${page}\` | ${cell(description)} |\n`;
+    if (lineCount(indexAfter) > INDEX_MAX_LINES) throw new Error(`index.md would be ${lineCount(indexAfter)} lines; the cap is ${INDEX_MAX_LINES}. Retire or merge another page first.`);
+    checkNoDrift([page, 'index.md']);
+    return apply('retire', archived, page, [
+      { path: archived, before: text, after: null },
+      { path: page, before: null, after: text },
+      ...(indexAfter === indexBefore ? [] : [{ path: 'index.md', before: indexBefore, after: indexAfter }]),
+      logLine(today(now()), `restored \`${page}\` from the archive, confirmed by the owner in the app.`),
     ]);
   });
 
@@ -498,7 +567,7 @@ export const createProposals = ({ knowledgeDir, backupDir, now = () => new Date(
         if (entry.name.startsWith('.')) continue;
         const path = relativeDir ? `${relativeDir}/${entry.name}` : entry.name;
         if (entry.isDirectory()) {
-          if (path === PROPOSALS_DIR) continue;
+          if (path === PROPOSALS_DIR || path === ARCHIVE_DIR) continue;
           folders.push(path);
           walk(path);
         } else if (entry.isFile() && entry.name.endsWith('.md') && !NOT_PAGES.has(path) && entry.name !== 'README.md') {
@@ -511,7 +580,7 @@ export const createProposals = ({ knowledgeDir, backupDir, now = () => new Date(
   };
 
   return {
-    listProposals, readProposal, listTargets, promoteProposal, mergeProposal, discardProposal, undoProposalChange,
+    listProposals, readProposal, listTargets, promoteProposal, mergeProposal, discardProposal, retirePage, listArchived, restorePage, undoProposalChange,
     /** The ticket's name for undo. It reverses merges and discards too. */
     undoPromotion: undoProposalChange,
   };

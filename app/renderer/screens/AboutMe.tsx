@@ -4,10 +4,18 @@ import { useCallback, useEffect, useState } from 'react';
 import { ArrowUpRight, Building2, User, Users } from 'lucide-react';
 import { useNavigate } from 'react-router';
 import { ABOUT_MAX_CHARS, type AboutMe as AboutMeData, type Audience, type Visibility } from '../../../src/owner-model.ts';
-import { pageBlocks, type Span } from './about.logic.ts';
+import { PageBody } from './PageBody.tsx';
 import { AudienceChoice } from './AudienceChoice.tsx';
 import { serra } from '../bridge.ts';
-import { Button, cx, Dialog, Page, Table, TBody, Td, Th, THead, Tr, useToast } from '../ui/index.ts';
+import { Button, cx, Dialog, Page, useToast } from '../ui/index.ts';
+
+/** A card's title in words: "Working style", not owner/working-style.md. */
+const sectionTitle = (path: string): string => {
+  const named: Record<string, string> = { 'people/': 'People', outsiders: 'Rules for outsiders', 'private topics': 'Private topics' };
+  if (named[path]) return named[path];
+  const words = (path.split('/').pop() ?? path).replace(/\.md$/, '').replace(/[-_]+/g, ' ');
+  return words.charAt(0).toUpperCase() + words.slice(1);
+};
 
 const AUDIENCES: { value: Visibility; label: string; icon: typeof User; hint: string }[] = [
   { value: 'owner', label: 'You', icon: User, hint: 'Your DMs with the bot and tasks you start in the app.' },
@@ -18,72 +26,6 @@ const AUDIENCES: { value: Visibility; label: string; icon: typeof User; hint: st
 const message = (error: unknown): string => (error instanceof Error ? error.message : String(error));
 
 
-
-/** A link opens outside the window, through the app, as every outside link here does; a failure shows as a toast. */
-const Inline = ({ spans, onOpen }: { spans: Span[]; onOpen: (href: string) => void }) => (
-  <>
-    {spans.map((span, at) => {
-      switch (span.kind) {
-        case 'bold': return <strong key={at} className="font-semibold text-ink">{span.text}</strong>;
-        case 'italic': return <em key={at} className="text-ink">{span.text}</em>;
-        case 'code': return <code key={at} className="rounded bg-raised px-1 py-0.5 font-mono text-[12px] text-ink">{span.text}</code>;
-        case 'link': return (
-          <a
-            key={at}
-            href={span.href}
-            onClick={(event) => { event.preventDefault(); onOpen(span.href); }}
-            className="text-ink underline underline-offset-2 hover:no-underline focus-visible:outline-2 focus-visible:outline-focus"
-          >
-            {span.text}
-          </a>
-        );
-        case 'text': return <span key={at}>{span.text}</span>;
-      }
-    })}
-  </>
-);
-
-/** A page's Markdown as it reads: headings, bullets, tables, quotes, fences and paragraphs, with bold, code and links live. */
-const PageBody = ({ text, onOpen }: { text: string; onOpen: (href: string) => void }) => (
-  <div className="flex flex-col gap-1.5 px-4 py-3 text-[13px] leading-6 text-ink">
-    {pageBlocks(text).map((block, at) => {
-      switch (block.kind) {
-        case 'heading':
-          return <p key={at} className={cx('text-ink', block.level <= 1 ? 'pt-1 text-sm font-semibold' : block.level === 2 ? 'pt-1 font-semibold' : 'pt-0.5 font-medium')}>{<Inline spans={block.spans} onOpen={onOpen} />}</p>;
-        case 'item':
-          return (
-            <p key={at} className="flex gap-2 text-muted" style={block.depth ? { marginLeft: block.depth * 16 } : undefined}>
-              <span aria-hidden className="shrink-0 text-faint">{block.number === null ? '•' : `${block.number}.`}</span>
-              <span className="min-w-0"><Inline spans={block.spans} onOpen={onOpen} /></span>
-            </p>
-          );
-        case 'quote':
-          return <blockquote key={at} className="border-l-2 border-line pl-2 text-muted"><Inline spans={block.spans} onOpen={onOpen} /></blockquote>;
-        case 'fence':
-          return <pre key={at} className="overflow-x-auto rounded-md bg-raised px-2.5 py-2 font-mono text-[12px] leading-5 text-ink">{block.text}</pre>;
-        case 'table':
-          return (
-            <div key={at} className="overflow-x-auto">
-              <Table className="text-xs">
-                {block.head.length > 0 && (
-                  <THead>
-                    <Tr>{block.head.map((cell, cellAt) => <Th key={cellAt} className="px-2 py-1"><Inline spans={cell} onOpen={onOpen} /></Th>)}</Tr>
-                  </THead>
-                )}
-                <TBody>
-                  {block.rows.map((row, rowAt) => (
-                    <Tr key={rowAt}>{row.map((cell, cellAt) => <Td key={cellAt} className="px-2 py-1 text-muted"><Inline spans={cell} onOpen={onOpen} /></Td>)}</Tr>
-                  ))}
-                </TBody>
-              </Table>
-            </div>
-          );
-        case 'text':
-          return <p key={at} className="text-muted"><Inline spans={block.spans} onOpen={onOpen} /></p>;
-      }
-    })}
-  </div>
-);
 
 export const AboutMe = () => {
   const navigate = useNavigate();
@@ -139,32 +81,25 @@ export const AboutMe = () => {
     }
   };
   const used = about ? Math.min(100, Math.round((100 * about.chars) / ABOUT_MAX_CHARS)) : 0;
-  const hint = AUDIENCES.find((option) => option.value === visibility)?.hint;
 
   return (
-    <Page title="About me" subtitle="Always in every job's brief. Other pages are read when a request needs them.">
+    <Page title="About me" subtitle={about ? `In every brief · ${used}% of the space` : undefined}>
       {error && <p role="alert" className="text-sm text-down">{error}</p>}
       {untagged.length > 0 && (
-        <section aria-labelledby="untagged-title" className="flex gap-3 rounded-lg border border-line bg-panel p-4">
-          <Users size={16} aria-hidden className="mt-0.5 shrink-0 text-muted" />
-          <div className="flex min-w-0 flex-1 flex-col gap-1">
-            <h2 id="untagged-title" className="text-sm font-semibold">
-              {untagged.length === 1 ? '1 page is only for you' : `${untagged.length} pages are only for you`}
-            </h2>
-            <p className="text-sm text-muted">
-              {untagged.length === 1 ? 'It doesn\u2019t say who may hear it, so teammates\u2019 briefs leave it out.' : 'They don\u2019t say who may hear them, so teammates\u2019 briefs leave them out.'}
-            </p>
-            <div className="mt-2">
-              <Button onClick={() => { setShareTo('team'); setSharing(new Set()); }}>{untagged.length === 1 ? 'Choose who may hear it' : 'Choose who may hear them'}</Button>
-            </div>
-          </div>
+        <section aria-labelledby="untagged-title" className="flex items-center gap-3 rounded-lg border border-line bg-panel px-4 py-2.5">
+          <Users size={16} aria-hidden className="shrink-0 text-muted" />
+          <h2 id="untagged-title" className="min-w-0 flex-1 text-[13px]" title="Teammates' briefs leave these out until you choose.">
+            {untagged.length === 1 ? '1 private page' : `${untagged.length} private pages`}
+          </h2>
+          <Button size="sm" onClick={() => { setShareTo('team'); setSharing(new Set()); }}>Share</Button>
         </section>
       )}
       <div className="flex flex-col gap-2">
         <div role="group" aria-label="Seen by" className="flex flex-wrap gap-1">
-          {AUDIENCES.map(({ value, label, icon: Icon }) => (
+          {AUDIENCES.map(({ value, label, icon: Icon, hint }) => (
             <button
               key={value}
+              title={hint}
               type="button"
               aria-pressed={visibility === value}
               onClick={() => setVisibility(value)}
@@ -178,7 +113,6 @@ export const AboutMe = () => {
             </button>
           ))}
         </div>
-        {hint && <p className="text-xs text-muted">{hint}</p>}
       </div>
 
       {about && (
@@ -186,10 +120,9 @@ export const AboutMe = () => {
           <div className="flex min-w-0 flex-1 flex-col gap-3">
             {about.sections.length === 0 && (
               <p className="text-sm text-muted">
-                Nothing for this audience yet. Confirm pages under owner/ (your role, how you work, your voice, what&rsquo;s off-limits)
-                and they show here.{' '}
+                Nothing yet.{' '}
                 <button type="button" onClick={() => void navigate('/knowledge/proposals?interview=1')} className="text-ink underline underline-offset-2 hover:no-underline focus-visible:outline-2 focus-visible:outline-focus">
-                  Start the interview
+                  Start interview
                 </button>
               </p>
             )}
@@ -197,8 +130,7 @@ export const AboutMe = () => {
               <section key={section.path} aria-label={section.path} className="rounded-lg border border-line bg-panel">
                 <header className="flex items-center justify-between gap-3 border-b border-line-subtle px-4 py-2.5">
                   <div className="flex min-w-0 items-baseline gap-2">
-                    <h2 className="min-w-0 font-mono text-[13px] font-semibold break-all">{section.path === 'people/' ? 'people/ (one line each)' : section.path === 'outsiders' ? 'Rules for outsiders (built in)' : section.path === 'private topics' ? 'Private topics (built in)' : section.path}</h2>
-                    <span className="shrink-0 text-xs text-muted">confirmed {section.verified}</span>
+                    <h2 className="min-w-0 text-[13px] font-semibold" title={section.path}>{sectionTitle(section.path)}</h2>
                   </div>
                   {section.path !== 'people/' && section.path !== 'outsiders' && section.path !== 'private topics' && <button
                     type="button"
@@ -213,21 +145,8 @@ export const AboutMe = () => {
             ))}
           </div>
 
-          <aside aria-label="Size and pages left out" className="flex w-full shrink-0 flex-col gap-4 lg:w-64">
-            <div className="flex flex-col gap-2 rounded-lg border border-line bg-panel p-4">
-              <h2 className="text-sm font-semibold">In every brief</h2>
-              <div
-                role="meter" aria-label="About me size" aria-valuemin={0} aria-valuemax={ABOUT_MAX_CHARS} aria-valuenow={about.chars}
-                className="h-1.5 overflow-hidden rounded-full bg-raised"
-              >
-                <div className="h-full rounded-full bg-accent" style={{ width: `${used}%` }} />
-              </div>
-              <p className="text-xs text-muted">
-                {about.chars.toLocaleString()} of {ABOUT_MAX_CHARS.toLocaleString()} characters, about {Math.round(about.chars / 4).toLocaleString()} tokens.
-                Over the limit, the least important pages are left out whole.
-              </p>
-            </div>
-            {about.left.length > 0 && (
+          {about.left.length > 0 && (
+          <aside aria-label="Pages left out" className="flex w-full shrink-0 flex-col gap-4 lg:w-64">
               <div className="flex flex-col gap-2 rounded-lg border border-line bg-panel p-4">
                 <h2 className="text-sm font-semibold">Not included</h2>
                 <ul className="flex flex-col gap-2">
@@ -241,8 +160,8 @@ export const AboutMe = () => {
                   ))}
                 </ul>
               </div>
-            )}
           </aside>
+          )}
         </div>
       )}
       <Dialog

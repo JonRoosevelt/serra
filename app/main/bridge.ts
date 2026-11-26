@@ -16,6 +16,8 @@ import type { CliOverview } from '../../src/clis.ts';
 import type { McpOverview } from '../../src/mcp.ts';
 import type { ProposalTargets, Reviewed } from '../../src/proposals.ts';
 import type { AboutMe, Visibility } from '../../src/owner-model.ts';
+import type { KnowledgeOverview } from '../../src/knowledge-overview.ts';
+import type { KnowledgeReview } from '../../src/knowledge-review-store.ts';
 import type { ActivationOutcome, ReleaseOverview, RollbackOutcome, RunningJob } from '../../src/releases.ts';
 import type { Prepared } from '../../src/deploy.ts';
 import type { ClearedSource } from '../../src/update-migration.ts';
@@ -179,6 +181,16 @@ export interface SerraApi {
     mergeInto(path: string, target: string, text: string | undefined, reviewed: Reviewed, audience?: Visibility): UndoHandle;
     discard(path: string): UndoHandle;
     undo(undoId: string): void;
+    /** Moves a page to `archive/` and takes its index row out. `reviewed`: the page's text as the owner saw it. */
+    retire(page: string, reviewed: string): UndoHandle;
+    /** True when this proposal is a weekly-review rewrite of a page that changed since the review saw it. */
+    staleRewrite(path: string): boolean;
+    /** Pages retired to the archive, with their descriptions. */
+    archived(): { path: string; description: string }[];
+    /** Bring a retired page back where it was, with an index row. */
+    restore(page: string): UndoHandle;
+    /** Existing pages the proposal looks like, with the lines they share: where it may belong instead of a new page. */
+    similar(path: string): { path: string; similarity: number; shared: string[]; disagrees: { page: string; proposal: string } | null }[];
   };
   /** Knowledge pages (APP-20). */
   pages: {
@@ -201,6 +213,16 @@ export interface SerraApi {
      * that changed since refuses the whole share.
      */
     share(pages: { path: string; text: string }[], audience: Visibility): { shared: string[] };
+    /** Knowledge › Overview: health, how it grew, and what replies used. */
+    overview(): KnowledgeOverview;
+    /** Run the weekly knowledge review now, through T3, and return its digest. */
+    runReview(): Promise<KnowledgeReview>;
+    /** Turn the weekly review on or off. */
+    setReviewWeekly(weekly: boolean): void;
+    /** Whether "Still true" may be offered for this page: false when a rule on it disagrees, or a newer page on its topic may have changed it. */
+    canConfirm(path: string): boolean;
+    /** Rules on this page that disagree with or repeat another, as the page is on disk now, for the editor. */
+    issues(path: string): KnowledgeOverview['health']['issues'];
   };
   /** Brief and policy (APP-21). */
   brief: {
@@ -406,8 +428,8 @@ export const bridgeMethods = {
   ]),
   bot: methods<'bot'>()(['status', 'start', 'stop', 'restart']),
   jobs: methods<'jobs'>()(['list', 'cleanupWorktrees']),
-  proposals: methods<'proposals'>()(['list', 'diff', 'targets', 'promote', 'mergeInto', 'discard', 'undo']),
-  pages: methods<'pages'>()(['list', 'read', 'save', 'drift', 'acceptDrift', 'restoreDrift', 'aboutMe', 'untagged', 'share']),
+  proposals: methods<'proposals'>()(['list', 'diff', 'targets', 'promote', 'mergeInto', 'discard', 'undo', 'retire', 'similar', 'archived', 'restore', 'staleRewrite']),
+  pages: methods<'pages'>()(['list', 'read', 'save', 'drift', 'acceptDrift', 'restoreDrift', 'aboutMe', 'untagged', 'share', 'overview', 'issues', 'canConfirm', 'runReview', 'setReviewWeekly']),
   brief: methods<'brief'>()(['read', 'save', 'check', 'preview', 'listProposed', 'readProposed', 'applyProposed']),
   settings: methods<'settings'>()(['read', 'sections', 'saveSection', 'addPerson', 'removePerson', 'peopleNames']),
   secrets: methods<'secrets'>()(['list', 'setSource', 'check']),

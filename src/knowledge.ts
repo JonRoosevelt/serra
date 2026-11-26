@@ -7,8 +7,9 @@ import { withKnowledgeLock } from './knowledge-lock.ts';
 import { createMeetingStore } from './meeting-store.ts';
 import { AUDIENCES, compileAboutMe, filterIndex, mayUse, pageAudience, type AboutMe, type Audience, type Visibility } from './owner-model.ts';
 import type { KnowledgePage, Profile } from './contracts.ts';
+import { AREA_LABELS, assessKnowledge, markIndexRows, pageArea, pageCards, type PageCard } from './knowledge-health.ts';
 import {
-  DATE, daysSince, frontmatter, INDEX_MAX_LINES, lineCount, normalizePageText, NOT_PAGES, pageBadge, pageProblems, PROPOSALS_DIR,
+  ARCHIVE_DIR, DATE, daysSince, frontmatter, INDEX_MAX_LINES, lineCount, normalizePageText, NOT_PAGES, pageBadge, pageProblems, PROPOSALS_DIR,
   isOfflimits, offlimitsBudgetProblem, pageBody, saveProblems, saveRefusal, setHeaderField, STALE_DAYS,
 } from './knowledge-rules.ts';
 
@@ -54,6 +55,8 @@ export const knowledgePagePath = (root: string, relativePath: string, what: stri
   const path = relative(root, insideKnowledge(root, relativePath, what)).split(sep).join('/');
   if (!path.endsWith('.md')) throw new Error(`${what} must be a .md file: ${relativePath}`);
   if (path === PROPOSALS_DIR || path.startsWith(`${PROPOSALS_DIR}/`)) throw new Error(`${what} can't be inside proposals/: ${relativePath}`);
+  // Retired pages live in archive/; one only comes back through Restore, never by saving or promoting into it.
+  if (path === ARCHIVE_DIR || path.startsWith(`${ARCHIVE_DIR}/`)) throw new Error(`${what} can't be inside ${ARCHIVE_DIR}/: ${relativePath}`);
   if (NOT_PAGES.has(path)) throw new Error(`${what} can't be ${path}; that file is not a page.`);
   return path;
 };
@@ -69,6 +72,8 @@ export interface BriefKnowledge {
   read: Record<string, Audience>;
   /** Where the worker opens pages: a snapshot of the approved pages it may use, which never changes. */
   readDir: string;
+  /** What the relevance hint ranks a request against: one card per page in this brief's index. */
+  cards?: PageCard[];
 }
 
 /** Markdown files under `dir`, relative to it, skipping dot folders. */
@@ -115,7 +120,7 @@ const markdownIn = (dir: string, relativeDir = ''): string[] => {
   return readdirSync(join(dir, relativeDir), { withFileTypes: true }).flatMap((entry) => {
     if (entry.name.startsWith('.')) return [];
     const path = relativeDir ? `${relativeDir}/${entry.name}` : entry.name;
-    if (entry.isDirectory()) return markdownIn(dir, path);
+    if (entry.isDirectory()) return path === ARCHIVE_DIR ? [] : markdownIn(dir, path);
     return entry.name.endsWith('.md') && !NOT_PAGES.has(path) && !path.startsWith(`${PROPOSALS_DIR}/`) ? [path] : [];
   });
 };
@@ -167,7 +172,7 @@ export const createKnowledge = (knowledgeDir: string, { backupDir }: KnowledgeOp
   const markdownFiles = (relativeDir = ''): string[] =>
     readdirSync(join(knowledgeDir, relativeDir), { withFileTypes: true }).flatMap((entry) => {
       const relativePath = relativeDir ? `${relativeDir}/${entry.name}` : entry.name;
-      if (entry.isDirectory()) return markdownFiles(relativePath);
+      if (entry.isDirectory()) return relativePath === ARCHIVE_DIR ? [] : markdownFiles(relativePath);
       return entry.name.endsWith('.md') ? [relativePath] : [];
     });
 
@@ -212,7 +217,10 @@ export const createKnowledge = (knowledgeDir: string, { backupDir }: KnowledgeOp
     const audiences = new Map(pages.map(({ path, text }) => [path, pageAudience(frontmatter(text))]));
     const descriptions = new Map(pages.map(({ path, text }) => [path, frontmatter(text)?.get('description')?.trim() ?? '']));
     const aboutMe = compileAboutMe(pages, visibility, now);
-    let index = filterIndex(indexText.trim(), (page) => (audiences.has(page) ? { audience: audiences.get(page)!, description: descriptions.get(page) ?? '' } : null), visibility);
+    // Each row says when its page is a draft or hasn't been re-checked in a while, so the worker weighs it accordingly.
+    // Only pages this reply may use are compared, so a note never quotes a page the audience may not hear.
+    const mayRead = pages.filter(({ path }) => mayUse(audiences.get(path)!, visibility));
+    let index = markIndexRows(filterIndex(indexText.trim(), (page) => (audiences.has(page) ? { audience: audiences.get(page)!, description: descriptions.get(page) ?? '' } : null), visibility), mayRead, now);
     // Every worker reads a snapshot of approved pages, so an edit waiting for review needs no note for teammates. The
     // owner hears which files are waiting. Before the approved copy exists, nobody opens pages.
     if (drifted && visibility === 'owner') {
@@ -228,7 +236,8 @@ export const createKnowledge = (knowledgeDir: string, { backupDir }: KnowledgeOp
     const texts = new Map(pages.map(({ path, text }) => [path, text]));
     const files = new Map([['index.md', `${index}\n`], ...usable.map((path) => [path, texts.get(path)!] as const)]);
     const readable = Object.fromEntries(usable.map((path) => [path, audiences.get(path)!]));
-    return { index, aboutMe, visibility, pages: usable, read: readable, readDir: snapshot(audienceDir(root, visibility), files, now) };
+    const cards = pageCards(index, pages.filter(({ path }) => usable.includes(path)));
+    return { index, aboutMe, visibility, pages: usable, read: readable, readDir: snapshot(audienceDir(root, visibility), files, now), cards };
   };
 
   /**
@@ -252,7 +261,13 @@ export const createKnowledge = (knowledgeDir: string, { backupDir }: KnowledgeOp
     }
     const budget = current !== null && isOfflimits(path, frontmatter(current)) ? offlimitsBudgetAfter(root, path, current) : null;
     if (budget) throw new Error(`Not accepted. ${budget}`);
+    const before = journal.approvedText(path);
     journal.accept(path, current);
+    // Accepting is a change to what the bot knows, so it is recorded like any other: Overview's history replays these.
+    const at = new Date();
+    const backupId = `${at.toISOString().replace(/[-:]/g, '').replace(/\.\d+Z$/, 'Z')}-accept-${randomBytes(3).toString('hex')}`;
+    mkdirSync(join(backups, backupId), { recursive: true, mode: 0o700 });
+    writeFileAtomic(join(backups, backupId, 'change.json'), JSON.stringify({ id: backupId, action: 'accept', at: at.toISOString(), files: [{ path, before, after: current }] }, null, 2) + '\n');
   };
 
   /** Put back the approved text of `path` (or every changed file), keeping a backup of what was there. */
@@ -346,6 +361,7 @@ export const createKnowledge = (knowledgeDir: string, { backupDir }: KnowledgeOp
       ...(written ? { written } : {}),
       verified: verified && DATE.test(verified) ? verified : null,
       badge: pageBadge(verified, options.now),
+      area: AREA_LABELS[pageArea(page, type ?? '')],
       lines: lineCount(text),
       problems,
       warnings: pageWarnings(page, text, fields, options),
@@ -388,7 +404,11 @@ export const createKnowledge = (knowledgeDir: string, { backupDir }: KnowledgeOp
   const listPages = ({ now = new Date(), roots = [] }: CheckOptions = {}): KnowledgePage[] => {
     if (!existsSync(root)) return [];
     const indexed = readIndexed();
-    return pageFiles().sort().map((page) => describePage(page, read(page), indexed, { now, roots }));
+    const files = pageFiles().sort();
+    // Pages holding a rule that disagrees with another are counted apart, so "verified" never covers them.
+    const disputed = new Set(assessKnowledge([{ path: 'index.md', text: existsSync(join(root, 'index.md')) ? read('index.md') : '' }, ...files.map((path) => ({ path, text: read(path) }))], now)
+      .issues.filter((issue) => issue.kind === 'conflict').flatMap((issue) => issue.pages));
+    return files.map((page) => ({ ...describePage(page, read(page), indexed, { now, roots }), ...(disputed.has(page) ? { disputed: true } : {}) }));
   };
 
   /** An existing page's path relative to `knowledge/`, checked. */

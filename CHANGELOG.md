@@ -4,6 +4,12 @@ Serra follows [Semantic Versioning](https://semver.org) once it reaches 1.0. Unt
 
 ## Unreleased
 
+- **Knowledge › Overview** shows what your notes do, at a glance: how many replies they shaped this week, one real request answered with and without them, and a short **To do** only when something needs you (three at a time, one button each). The health score and its trend, areas, a timeline of what the bot learned or retired, and each page's use are under Details. See `docs/knowledge-health.md`.
+- **A weekly knowledge review.** Once a week Serra looks back at the bot's replies and adds a digest to Overview: what the bot needed and no note had, and fixes to approve (a rewrite that settles two rules, retiring a page, confirming a stale one still holds). It runs as a read-only T3 run on the worker's provider; nothing changes until you approve. Turn it off or run it now from Overview. Digests are kept in `knowledge-reviews/` in the profile.
+- When two current rules disagree, To do offers **Keep Thursday / Keep Tuesday**: it saves at once with Undo and moves the other under a dated `## Replaced`. The worker's index marks both rows and names the current rule, also when a newer page says an older one ended ("moved from Grafana to Datadog", "OAuth login was removed").
+- Pages has **Retire…**: a page moves to `knowledge/archive/`, its index row goes, and Undo or **Restore** brings it back. Proposals says when a new proposal repeats a page you have, with **Merge into it…**. Pages lists pages by topic and description, and Pages, About me and Proposals lost their explanatory paragraphs.
+- Workers now see which index rows are drafts or out of date, get the three pages closest to the request as a hint, and end a reply with a line naming the pages they used. Serra removes that line before posting and records it in `logs/knowledge-usage.jsonl`, with any T3 provider.
+- **Brief & policy moved to Settings.** Knowledge now holds only what you check.
 - Fixed: **Test** in Settings › Meetings said a source was missing when its connection (for example a Granola MCP) had been added since T3 started and the provider hadn't listed it yet. The test may now look its tools up, and when it says missing, Serra asks once more in the same thread before keeping the answer. It still calls none of the source's tools.
 
 ## 0.1.0-alpha.5 (2026-11-24)

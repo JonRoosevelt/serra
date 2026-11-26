@@ -1,6 +1,6 @@
 // `--smoke` checks, run against the real window: no Node in the page, the bridge is there, and with no daemon the
 // window gets `stopped` and a failing call rejects with its message instead of crashing anything.
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { nativeTheme, type BrowserWindow } from 'electron';
@@ -140,7 +140,53 @@ const layoutProfile = (): string => {
   writeFileSync(join(knowledge, 'index.md'), "# Knowledge index\n\n| When the request | Open | What it gives you |\n|---|---|---|\n"
     + "| who owns what | `owner/role.md` | The owner's role |\n| releases, tests | `owner/working-style.md` | How the owner decides |\n"
     + "| writing | `owner/voice.md` | How the owner writes |\n| private | `owner/notes.md` | Private notes |\n| mentions Ana | `people/ana-silva.md` | Who Ana is |\n");
+  // A history for Overview: each page approved on its own day, one later edit that left an old rule beside its
+  // replacement, and replies that named the pages they used.
+  const backups = join(directory, 'backups', 'knowledge');
+  const approved = [['owner/role.md', '2026-10-06'], ['owner/voice.md', '2026-10-06'], ['owner/notes.md', '2026-10-13'], ['owner/working-style.md', '2026-10-20'], ['people/ana-silva.md', '2026-11-03']] as const;
+  const styleBefore = page('How the owner decides', team, '# How I work\n\n- Risky releases ship on Tuesday.\n- A bug fix starts with a failing test.');
+  const styleAfter = page('How the owner decides', team, '# How I work\n\n- Risky releases ship on Tuesday.\n- A bug fix starts with a failing test.\n- Risky releases ship on Thursday now.');
+  writeFileSync(join(knowledge, 'owner/working-style.md'), styleAfter);
+  const record = (id: string, at: string, files: { path: string; before: string | null; after: string }[]): void => {
+    mkdirSync(join(backups, id), { recursive: true });
+    writeFileSync(join(backups, id, 'change.json'), JSON.stringify({ id, action: files[0]!.before === null ? 'promote' : 'edit', at: `${at}T10:00:00.000Z`, proposal: 'smoke', page: files[0]!.path, files }));
+  };
+  for (const [path, at] of approved) {
+    record(`${at.replaceAll('-', '')}-${path.replace(/\W/g, '-')}`, at, [{ path, before: null, after: path === 'owner/working-style.md' ? styleBefore : readFileSync(join(knowledge, path), 'utf8') }]);
+  }
+  record('20261118-edit-working-style', '2026-11-18', [{ path: 'owner/working-style.md', before: styleBefore, after: styleAfter }]);
+  mkdirSync(join(directory, 'logs'), { recursive: true });
+  const uses: [string[], string, string][] = [
+    [['owner/role.md', 'owner/working-style.md'], 'can we ship the refunds change on Thursday?', 'Yes: risky releases ship on Thursday now. Run the smoke suite first.'],
+    [['owner/working-style.md'], 'do I need a test for this one-line fix?', 'Yes. A bug fix starts with a failing test.'],
+    [[], 'thanks!', 'Any time.'],
+    [['people/ana-silva.md', 'owner/role.md'], 'how should I send Ana the launch numbers?', 'A short written note: Ana prefers that to a call.'],
+    [['owner/working-style.md'], 'is Thursday ok for the webhook release?', 'Thursday works: that is the current release day.'],
+  ];
+  writeFileSync(join(directory, 'logs', 'knowledge-usage.jsonl'), uses.map(([cited, request, reply], at) =>
+    JSON.stringify({ at: new Date(Date.now() - (at + 1) * 86_400_000).toISOString(), runId: `smoke-${at}`, visibility: 'team', cited, offered: 4, request, reply })).join('\n') + '\n');
+  // A weekly review, as the T3 run would have written it, with the rewrite it proposed, so Overview shows its digest.
+  mkdirSync(join(knowledge, 'proposals', 'from-review', new Date().toISOString().slice(0, 10)), { recursive: true });
+  writeFileSync(join(knowledge, 'proposals', 'from-review', new Date().toISOString().slice(0, 10), '.from.json'), JSON.stringify({ who: 'Weekly review', owner: false, via: 'review' }));
+  writeFileSync(join(knowledge, 'proposals', 'from-review', new Date().toISOString().slice(0, 10), `${new Date().toISOString().slice(0, 10)}-owner-working-style.md`),
+    page('How the owner decides', ['verified: no', 'audience: team', 'target: owner/working-style.md'], '# How I work\n\n- Risky releases ship on Thursday now.\n- A bug fix starts with a failing test.\n\n## Replaced\n\n- Until 2026-11-18: Risky releases ship on Tuesday.')
+      .replace('  - Owner interview, 2026-11-19\n', `  - Owner interview, 2026-11-19\n  - Weekly review, ${new Date().toISOString().slice(0, 10)}\n`));
+  mkdirSync(join(directory, 'knowledge-reviews'), { recursive: true });
+  const today = new Date().toISOString().slice(0, 10);
+  writeFileSync(join(directory, 'knowledge-reviews', `${today}.json`), JSON.stringify({
+    id: today, at: new Date().toISOString(), from: new Date(Date.now() - 7 * 86_400_000).toISOString().slice(0, 10), to: today,
+    summary: 'Your notes shaped 4 of 5 replies this week, most of all how you decide about releases. Two rules on that page disagree: settle the release day.',
+    replies: 5, withKnowledge: 4, score: { before: 91, now: 84 }, facts: { before: 6, now: 7 },
+    used: [{ page: 'owner/working-style.md', title: 'How the owner decides', uses: 3 }, { page: 'owner/role.md', title: "The owner's role", uses: 2 }],
+    missing: [{ topic: 'who approves refunds over 500 EUR', count: 2 }],
+    suggestions: [
+      { id: 'replace:owner/working-style.md', kind: 'replace', page: 'owner/working-style.md', title: 'How the owner decides', why: 'Keeps Thursday, the newer rule, and moves Tuesday under Replaced.', proposal: `from-review/${today}/${today}-owner-working-style.md` },
+    ],
+    examples: [{ page: 'owner/working-style.md', title: 'How the owner decides', request: 'can we ship the refunds change on Thursday?', withPage: 'Yes, Thursday works: risky releases ship on Thursday now. Run the smoke suite first.', without: "I don't know which day risky releases ship. Check with the owner before shipping anything risky." }],
+  }));
   writeFileSync(join(knowledge, 'proposals/2026-11-19-role.md'), page("The owner's role", ['verified: no', 'target: owner/role.md'], 'Owns the API and reviews every PR.'));
+  // A correction that repeats a page the owner has, so Proposals shows where it belongs.
+  writeFileSync(join(knowledge, 'proposals/2026-11-20-release-days.md'), page('When the owner ships', ['verified: no'], '- Risky releases ship on Thursday now.'));
   // A page changed outside Serra after the owner approved the rest, so Pages shows its notice.
   createJournal(knowledge).seed();
   writeFileSync(join(knowledge, 'owner/voice.md'), page('How the owner writes', team, '# Voice\n\n- Lead with the answer.\n- No exclamation marks.\n- Edited by hand.'));
@@ -156,6 +202,8 @@ const layoutScript = (profileDir: string): string => `(async () => {
   await window.serra.app.setPrefs({ profileDir: ${JSON.stringify(profileDir)} });
   window.dispatchEvent(new Event('serra:setup-changed'));
   await wait(() => !document.querySelector('[data-setup-required]'));
+  // The sidebar counts load a moment after the profile: wait for one so every capture shows them.
+  await wait(() => document.querySelector('[data-serra-sidebar] a[data-route] span[aria-label]'));
   const screens = [];
   for (const link of document.querySelectorAll('[data-serra-sidebar] a[data-route]')) {
     if (link.dataset.route === 'diagnostics') continue;
@@ -258,6 +306,32 @@ const themePaletteScript = (theme: Theme, label: string): string => `(async () =
   return report('${theme}', '⌘K › Switch theme…');
 })()`;
 
+/** The knowledge screens whose visible words the smoke run counts. */
+const KNOWLEDGE_ROUTES = ['knowledge-overview', 'about-me', 'proposals', 'pages', 'brief'];
+
+/** Words a person can see in the main pane: everything rendered, and what fits in the first screenful. */
+const wordsScript = `(() => {
+  const main = document.querySelector('[data-serra-main]');
+  const count = (text) => (text.match(/[\\p{L}\\p{N}][\\p{L}\\p{N}'’.-]*/gu) ?? []).length;
+  let total = 0; let firstScreen = 0;
+  const walker = document.createTreeWalker(main, NodeFilter.SHOW_TEXT);
+  for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+    const el = node.parentElement;
+    if (!el || !node.textContent.trim() || el.closest('[hidden], [aria-hidden="true"], dialog:not([open])')) continue;
+    // Inside a closed <details>, only its summary shows.
+    const shut = el.closest('details:not([open])');
+    if (shut && !el.closest('summary')) continue;
+    if (el.checkVisibility && !el.checkVisibility({ visibilityProperty: true, contentVisibilityAuto: true })) continue;
+    const range = document.createRange(); range.selectNodeContents(node);
+    const rects = [...range.getClientRects()].filter((r) => r.width > 0 && r.height > 0);
+    if (rects.length === 0) continue;
+    const words = count(node.textContent);
+    total += words;
+    if (rects[0].top < window.innerHeight && rects[0].bottom > 0) firstScreen += words;
+  }
+  return { total, firstScreen };
+})()`;
+
 /** The least contrast text may have with what is behind it (WCAG AA for normal text). */
 const MIN_CONTRAST = 4.5;
 
@@ -271,6 +345,8 @@ const contrastScript = (route: string): string => `(async () => {
   const wait = async (check) => { for (let i = 0; i < 80 && !check(); i++) await new Promise((r) => setTimeout(r, 50)); return check(); };
   ${route.startsWith('#') ? `location.hash = '${route}'; await new Promise((r) => setTimeout(r, 100));` : `document.querySelector('[data-serra-sidebar] a[data-route="${route}"]')?.click();`}
   await wait(() => document.querySelector('[data-serra-main] h1, [data-serra-main] [data-screen-label]'));
+  // With a profile, the sidebar counts load a moment later; the capture should show them.
+  ${route.startsWith('#') ? '' : "window.dispatchEvent(new Event('serra:refresh-counts')); await wait(() => document.querySelector('[data-serra-sidebar] a[data-route=proposals] span[aria-label]'));"}
   await new Promise((r) => setTimeout(r, 400));
   const ctx = document.createElement('canvas').getContext('2d', { willReadFrequently: true });
   const rgba = (css) => {
@@ -358,13 +434,36 @@ const runThemeChecks = async (window: BrowserWindow): Promise<string[]> => {
     for (const [theme, label] of [['dark', 'Dark'], ['light', 'Light'], ['system', 'System']] as const) expect(theme, await run(themePaletteScript(theme, label)));
 
     const routes = await run<string[]>(routesScript);
+    // Visible words on each knowledge screen, all of it and the first screenful, so copy cuts can be measured.
+    const words: Record<string, { total: number; firstScreen: number }> = {};
+    const countWords = async (name: string): Promise<void> => { words[name] = await run<{ total: number; firstScreen: number }>(wordsScript); };
     for (const theme of ['light', 'dark'] as const) {
       await run(themeControlScript(theme));
       const reports: ContrastReport[] = [];
       for (const route of routes) {
         const report = await run<ContrastReport>(contrastScript(route));
         reports.push(report);
-        if (shots) writeFileSync(join(shots, `${theme}-${route}.png`), (await window.webContents.capturePage()).toPNG());
+        if (theme === 'light' && KNOWLEDGE_ROUTES.includes(route)) await countWords(route);
+        if (shots) {
+          writeFileSync(join(shots, `${theme}-${route}.png`), (await window.webContents.capturePage()).toPNG());
+          // Pages with a page open, and its Retire dialog.
+          if (route === 'pages') {
+            await run(`(async () => { location.hash = '#/knowledge/pages?page=owner%2Fworking-style.md'; await new Promise((r) => setTimeout(r, 400)); (document.querySelector('[data-serra-main] nav[aria-label="Pages"]')?.nextElementSibling ?? document.querySelector('[data-serra-main] textarea'))?.scrollIntoView({ block: 'start' }); await new Promise((r) => setTimeout(r, 150)); })()`);
+            if (theme === 'light') await countWords('pages-detail');
+            writeFileSync(join(shots, `${theme}-pages-detail.png`), (await window.webContents.capturePage()).toPNG());
+            await run(`(async () => { [...document.querySelectorAll('button')].find((b) => b.textContent.trim() === 'Retire…')?.click(); await new Promise((r) => setTimeout(r, 300)); })()`);
+            writeFileSync(join(shots, `${theme}-pages-retire.png`), (await window.webContents.capturePage()).toPNG());
+            await run(`(async () => { [...document.querySelectorAll('dialog[open] button')].find((b) => b.textContent.trim() === 'Cancel')?.click(); await new Promise((r) => setTimeout(r, 200)); })()`);
+          }
+          // Overview is long: what the notes do, and its lower half, scrolled into view.
+          if (route === 'knowledge-overview') {
+            // Details open: what each page does, then the rest.
+            await run(`(async () => { for (const d of document.querySelectorAll('[data-serra-main] details')) d.open = true; await new Promise((r) => setTimeout(r, 150)); document.querySelector('#value-title')?.scrollIntoView({ block: 'start' }); await new Promise((r) => setTimeout(r, 150)); })()`);
+            writeFileSync(join(shots, `${theme}-${route}-value.png`), (await window.webContents.capturePage()).toPNG());
+            await run(`(async () => { for (const el of document.querySelectorAll('*')) if (el.scrollHeight > el.clientHeight + 40 && getComputedStyle(el).overflowY.match(/auto|scroll/)) el.scrollTop = el.scrollHeight; await new Promise((r) => setTimeout(r, 150)); })()`);
+            writeFileSync(join(shots, `${theme}-${route}-end.png`), (await window.webContents.capturePage()).toPNG());
+          }
+        }
         if (report.checked === 0) failures.push(`${theme}: no text found on ${route}`);
         for (const item of report.low) failures.push(`${theme}: "${item.text}" on ${route} reads at ${item.ratio}:1 (${item.color} on ${item.background})`);
       }
@@ -383,6 +482,10 @@ const runThemeChecks = async (window: BrowserWindow): Promise<string[]> => {
       await setupPass(withoutProfile, 'none-');
       await useProfile(directory);
       await run(`location.hash = '#/jobs/needs-you'`);
+      if (theme === 'light') {
+        console.log('[serra] smoke words:', JSON.stringify(words));
+        if (shots) writeFileSync(join(shots, 'words.json'), `${JSON.stringify(words, null, 2)}\n`);
+      }
       console.log(`[serra] smoke contrast in ${theme}:`, JSON.stringify(reports.map(({ route, checked, low }) => ({ route, checked, low: low.length }))));
     }
   } finally {

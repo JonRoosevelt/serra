@@ -1,0 +1,415 @@
+{
+  "about": "Before/after proof (evals/kb-proof.ts). Robin's fixture, eight months on: 45 pages, a rule that changed on the same page, a newer rule on a page the question doesn't point to, a stale page with a newer one beside it, and 15 distractor pages. Every case is something a model can't guess without Robin's notes. `include`: regexes the reply must match (case-insensitive). `exclude`: must not match. `judge`: a rubric a second T3 run scores 0-2. A case passes when every regex holds and the judge, if any, gives 2. Version 2 (round 7): the `friday` case no longer depends on today's real weekday (v1 asked as if it were Friday, and workers corrected it from the clock); four more changed rules were added to the fixture, which also changed the right answers of `flags` and `payload-retention`. No case was changed to fit a result. v1 results stay in ~/serra-notes/kb-growth/evals/proof-r6-claude/. Grading fix after the round-7 run, applied to every arm alike: `payload-retention` lost an `exclude` regex that failed replies which named the old 30 days as out of date, and each rubric is now scored by three grader runs, majority wins (one grader run scored correct Friday answers 0). After round 8: the `friday` rubric now states Robin's real hours (graders were marking the right hours as invented), applied to every arm alike by --regrade. Round 7 added five held-out changed-rule cases (category `held-out`), written after the detector was frozen for them; nothing was tuned on them. Round 8: `pr-size` and `priya-style` passed with no notes at all, so their regexes now need what only Robin's notes say (400 lines; send trade-offs). Round 10: `pr-size` asked for 400, but the fixture's current PR limit is 300 (the `pr-limit` case), so it passed replies that gave the out-of-date limit; it now needs 300, applied to every arm alike by `--regrade --only pr-size`. Round 11: ten held-out cases (category `held-out-2`) whose change is not a number or a weekday (a bus, an SDK, a tool, an endpoint, an owner, a process, a language, a login, a vendor), on three new pages whose index rows don't point to the questions. Written before any run; the detector and brief code were not changed for them. After round 11's first review, before any held-out-2 run was graded: `go-sdk` and `french` regexes now need the current answer (the judge already did); applied to every arm by `--regrade`. `new-dashboard` is weaker than the others (the old page says alerts page Jonas's team, not who builds dashboards) and is reported both with and without it. The conflict detector cannot flag any held-out-2 pair (it needs a different number or day, or a negation), so these cases test the brief and retrieval (the relevance hint, index rows), not the detector.",
+  "cases": [
+    {
+      "id": "priorities",
+      "category": "owner",
+      "via": "dm",
+      "user": "UROBIN0001",
+      "text": "what are my two priorities this quarter?",
+      "include": [
+        "multi-?currency",
+        "duplicate webhook"
+      ]
+    },
+    {
+      "id": "friday",
+      "category": "owner",
+      "via": "channel",
+      "user": "UPRIYA0001",
+      "text": "if I ping Robin on a Friday afternoon, will they answer quickly?",
+      "include": [
+        "Friday|focus"
+      ],
+      "judge": "Robin works 09:00-17:00 Lisbon time, Monday to Thursday; Fridays are focus days (no meetings, slow replies). 2 = says a Friday reply will be slow (mentioning the focus day or the Monday-to-Thursday hours is right); 1 = vague; 0 = says Robin will answer quickly."
+    },
+    {
+      "id": "signoff",
+      "category": "people",
+      "via": "channel",
+      "user": "UPRIYA0001",
+      "text": "who needs to sign off before we deploy the refunds release?",
+      "include": [
+        "Jonas"
+      ]
+    },
+    {
+      "id": "scope",
+      "category": "people",
+      "via": "channel",
+      "user": "UJONAS0001",
+      "text": "who gets to decide whether we support JPY refunds, product or eng?",
+      "include": [
+        "Priya"
+      ],
+      "judge": "Priya (product) decides scope; Robin decides how. 2 = says Priya decides whether; 1 = names Priya without the split; 0 = says eng or Robin decides."
+    },
+    {
+      "id": "release-steps",
+      "category": "process",
+      "via": "channel",
+      "user": "UPRIYA0001",
+      "text": "I've never cut a Ledgerline release. what are the steps?",
+      "include": [
+        "release:prepare",
+        "Jonas"
+      ]
+    },
+    {
+      "id": "incident",
+      "category": "process",
+      "via": "channel",
+      "user": "UPRIYA0001",
+      "text": "payments look down for everyone right now, what do I do first?",
+      "include": [
+        "Jonas|PagerDuty"
+      ]
+    },
+    {
+      "id": "discount",
+      "category": "owner",
+      "via": "dm",
+      "user": "UROBIN0001",
+      "text": "how much discount can I offer Brightmoor again?",
+      "include": [
+        "12"
+      ]
+    },
+    {
+      "id": "invoice-numbers",
+      "category": "product",
+      "via": "channel",
+      "user": "UJONAS0001",
+      "text": "what format do our invoice numbers use?",
+      "include": [
+        "INV-"
+      ]
+    },
+    {
+      "id": "payload-retention",
+      "category": "changed",
+      "via": "channel",
+      "user": "UJONAS0001",
+      "text": "how long do we keep webhook payloads?",
+      "include": [
+        "14 days"
+      ],
+      "judge": "An older page (confirmed 2026-04-01) says webhook payloads are kept 30 days; a newer page (confirmed 2026-11-12) says 14 days. 2 = says 14 days is current; 1 = both without picking, or asks; 0 = says 30 days."
+    },
+    {
+      "id": "sandbox-reset",
+      "category": "product",
+      "via": "channel",
+      "user": "UJONAS0001",
+      "text": "when does the sandbox get wiped?",
+      "include": [
+        "Sunday"
+      ]
+    },
+    {
+      "id": "flags",
+      "category": "changed",
+      "via": "channel",
+      "user": "UJONAS0001",
+      "text": "how fast should I roll out a new feature flag?",
+      "include": [
+        "10\\s?%",
+        "50\\s?%"
+      ],
+      "judge": "An older page (confirmed 2026-05-01) says flags roll out 5%, 25%, 100% over three days; a newer page (confirmed 2026-11-05) says 10%, 50%, 100% over two days. 2 = gives 10/50/100 as current; 1 = both without picking, or asks; 0 = gives 5/25/100."
+    },
+    {
+      "id": "jpy",
+      "category": "product",
+      "via": "channel",
+      "user": "UPRIYA0001",
+      "text": "can merchants get refunds in yen?",
+      "include": [
+        "\\bno\\b|not (planned|supported)|isn'?t|aren'?t|can'?t"
+      ],
+      "judge": "JPY is not planned (no minor-unit handling); live currencies are EUR and GBP, USD next. 2 = says no and why or which are live; 1 = says no only; 0 = says yes."
+    },
+    {
+      "id": "release-day",
+      "category": "changed",
+      "via": "dm",
+      "user": "UROBIN0001",
+      "text": "which day do risky releases ship these days?",
+      "include": [
+        "Thursday"
+      ],
+      "judge": "The working-style page says risky releases used to ship on Tuesday and, since 2026-10-01, ship on Thursday. 2 = says Thursday is current (may mention the old Tuesday rule); 1 = gives both without picking or asks; 0 = says Tuesday."
+    },
+    {
+      "id": "rate-limit",
+      "category": "changed",
+      "via": "channel",
+      "user": "UJONAS0001",
+      "text": "a merchant is getting 429s, what is our API rate limit per merchant?",
+      "include": [
+        "250"
+      ],
+      "judge": "An older page (confirmed 2026-06-01) says 100 requests per second; a newer page on plans (confirmed 2026-10-20) says 250. 2 = says 250 is the current limit; 1 = gives both without picking, or asks; 0 = says 100."
+    },
+    {
+      "id": "handover",
+      "category": "changed",
+      "via": "channel",
+      "user": "UJONAS0001",
+      "text": "when is the on-call handover now?",
+      "include": [
+        "Tuesday",
+        "09:00|9 ?am|9:00"
+      ],
+      "judge": "The rota page (confirmed 2026-05-01) says Monday 10:00; a newer note (confirmed 2026-11-10) says the handover moved to Tuesday at 09:00. 2 = Tuesday 09:00 as current; 1 = both without picking, or asks; 0 = Monday 10:00."
+    },
+    {
+      "id": "friday-release",
+      "category": "changed",
+      "via": "channel",
+      "user": "UPRIYA0001",
+      "text": "can we ship the risky webhook change this Friday?",
+      "include": [
+        "\\bno\\b|not on (a )?Friday|never (on )?Friday|Thursday"
+      ],
+      "exclude": [
+        "\\byes, (ship|go)"
+      ],
+      "judge": "Risky releases never ship on Friday (Thursday is the day). 2 = says no and points to Thursday; 1 = says no without a day; 0 = says yes."
+    },
+    {
+      "id": "pr-limit",
+      "category": "changed",
+      "via": "channel",
+      "user": "UJONAS0001",
+      "text": "what's the max PR size these days?",
+      "include": [
+        "300"
+      ],
+      "judge": "The working-style page says PRs under 400 changed lines, and a newer line on the same page (since 2026-09-15) says under 300. 2 = says 300 is current; 1 = both without picking, or asks; 0 = says 400."
+    },
+    {
+      "id": "fx-time",
+      "category": "changed",
+      "via": "channel",
+      "user": "UJONAS0001",
+      "text": "what time do FX rates update each day?",
+      "include": [
+        "05:00|5 ?am|5:00"
+      ],
+      "judge": "An older page says FX rates come from the treasury feed at 06:00 UTC; a newer page (confirmed 2026-10-30) says 05:00 UTC. 2 = 05:00 UTC as current; 1 = both without picking, or asks; 0 = 06:00."
+    },
+    {
+      "id": "pr-size",
+      "category": "owner",
+      "via": "channel",
+      "user": "UJONAS0001",
+      "text": "I've got a 900-line PR. good to merge as one?",
+      "include": [
+        "\\b300\\b"
+      ]
+    },
+    {
+      "id": "dana",
+      "category": "people",
+      "via": "dm",
+      "user": "UROBIN0001",
+      "text": "remind me who Dana is again?",
+      "include": [
+        "Brightmoor"
+      ]
+    },
+    {
+      "id": "priya-style",
+      "category": "people",
+      "via": "dm",
+      "user": "UROBIN0001",
+      "text": "how does Priya like to get updates?",
+      "include": [
+        "written|async|note",
+        "trade-?offs?"
+      ]
+    },
+    {
+      "id": "pdf-cache",
+      "category": "product",
+      "via": "channel",
+      "user": "UJONAS0001",
+      "text": "how long are invoice PDFs cached?",
+      "include": [
+        "24 ?h"
+      ]
+    },
+    {
+      "id": "payments-bugs",
+      "category": "held-out",
+      "via": "channel",
+      "user": "UJONAS0001",
+      "text": "where should I report a payments bug?",
+      "include": [
+        "#payments-bugs"
+      ],
+      "judge": "An older page (confirmed 2026-03-01) says payments bugs go to #ledgerline-triage; a newer page (2026-11-15) says they now go to #payments-bugs. 2 = #payments-bugs as current; 1 = both without picking, or asks; 0 = only #ledgerline-triage."
+    },
+    {
+      "id": "usd-live",
+      "category": "held-out",
+      "via": "channel",
+      "user": "UPRIYA0001",
+      "text": "can merchants take payments in USD yet?",
+      "include": [
+        "\\byes\\b|live"
+      ],
+      "exclude": [
+        "not (yet )?live|not yet"
+      ],
+      "judge": "An older page says USD is next; a newer page (2026-11-18) says USD is live since 2026-11-18. 2 = says USD is live; 1 = both without picking, or asks; 0 = says USD isn't live yet."
+    },
+    {
+      "id": "partial-refund",
+      "category": "held-out",
+      "via": "channel",
+      "user": "UJONAS0001",
+      "text": "what's the smallest partial refund a merchant can make?",
+      "include": [
+        "\\b50\\b"
+      ],
+      "judge": "An older page (2026-03-01) says partial refunds go down to 1 minor unit; a newer page (2026-11-01) says at least 50 minor units. 2 = 50 minor units as current; 1 = both without picking, or asks; 0 = 1 minor unit."
+    },
+    {
+      "id": "log-retention",
+      "category": "held-out",
+      "via": "channel",
+      "user": "UJONAS0001",
+      "text": "how long do we keep logs?",
+      "include": [
+        "30 days"
+      ],
+      "judge": "An older page (2026-04-01) says logs are kept 14 days; a newer page (2026-10-25) says 30 days. 2 = 30 days as current; 1 = both without picking, or asks; 0 = 14 days."
+    },
+    {
+      "id": "rota-swap",
+      "category": "held-out",
+      "via": "channel",
+      "user": "UJONAS0001",
+      "text": "who do I ask to swap an on-call shift?",
+      "include": [
+        "Priya"
+      ],
+      "judge": "An older page says rota swaps go through Jonas; a newer note (2026-11-10) says swaps now go through Priya while Jonas is on leave. 2 = Priya as current; 1 = both without picking, or asks; 0 = only Jonas."
+    },
+    {
+      "id": "event-bus",
+      "category": "held-out-2",
+      "via": "channel",
+      "user": "UJONAS0001",
+      "text": "what message bus do our services use for events?",
+      "include": [
+        "Kafka"
+      ],
+      "judge": "The architecture page says events go over NATS; a newer platform note (2026-11-14) says services publish to Kafka and NATS was switched off. 2 = Kafka as current; 1 = both without picking, or asks; 0 = only NATS."
+    },
+    {
+      "id": "go-sdk",
+      "category": "held-out-2",
+      "via": "channel",
+      "user": "UPRIYA0001",
+      "text": "is there an official Go SDK for Ledgerline?",
+      "include": [
+        "retired|no longer|discontinued|deprecated"
+      ],
+      "judge": "The SDKs page lists TypeScript, Python and Go; a newer platform note (2026-11-14) says the Go SDK was retired on 2026-11-01. 2 = says no, it was retired; 1 = both without picking, or asks; 0 = says yes."
+    },
+    {
+      "id": "dashboards-tool",
+      "category": "held-out-2",
+      "via": "channel",
+      "user": "UJONAS0001",
+      "text": "where do I find the payments dashboard?",
+      "include": [
+        "Datadog"
+      ],
+      "judge": "The dashboards page says Grafana; a newer platform note (2026-11-14) says dashboards moved to Datadog and Grafana is read-only. 2 = Datadog as current; 1 = both without picking, or asks; 0 = only Grafana."
+    },
+    {
+      "id": "refund-endpoint",
+      "category": "held-out-2",
+      "via": "channel",
+      "user": "UJONAS0001",
+      "text": "which endpoint creates a refund?",
+      "include": [
+        "v3/refunds"
+      ],
+      "judge": "The refunds API page says POST /v2/refunds; a newer platform note (2026-11-14) says refunds are created with POST /v3/refunds and v2 is deprecated. 2 = /v3/refunds as current; 1 = both without picking, or asks; 0 = only /v2/refunds."
+    },
+    {
+      "id": "status-page",
+      "category": "held-out-2",
+      "via": "channel",
+      "user": "UPRIYA0001",
+      "text": "who updates the public status page during an incident?",
+      "include": [
+        "support"
+      ],
+      "judge": "An older page says Jonas posts incidents on the status page; a newer planning note (2026-11-16) says support, not Jonas, posts them. 2 = support as current; 1 = both without picking, or asks; 0 = only Jonas."
+    },
+    {
+      "id": "changelog",
+      "category": "held-out-2",
+      "via": "channel",
+      "user": "UPRIYA0001",
+      "text": "how do we tell merchants about a change we shipped?",
+      "include": [
+        "digest"
+      ],
+      "judge": "The changelog page says every merchant-visible change gets a changelog entry; a newer planning note (2026-11-16) says the changelog is replaced by a monthly release digest emailed to merchants. 2 = the monthly digest as current; 1 = both without picking, or asks; 0 = only the changelog."
+    },
+    {
+      "id": "new-dashboard",
+      "category": "held-out-2",
+      "via": "channel",
+      "user": "UJONAS0001",
+      "text": "who do I ask for a new Grafana dashboard?",
+      "include": [
+        "Mira"
+      ],
+      "judge": "The dashboards page says alerts page Jonas's team; a newer planning note (2026-11-16) says ask Mira, not Jonas, for new dashboards (and dashboards moved to Datadog). 2 = Mira (may mention Datadog); 1 = both without picking, or asks; 0 = only Jonas."
+    },
+    {
+      "id": "french",
+      "category": "held-out-2",
+      "via": "channel",
+      "user": "UPRIYA0001",
+      "text": "is the merchant dashboard available in French?",
+      "include": [
+        "\\byes\\b|\\bis live\\b|\\bnow live\\b|live (in|since)"
+      ],
+      "judge": "The localisation page lists English, Portuguese and German; a newer Q4 note (2026-11-19) says French is live since 2026-11-12. 2 = yes, French is live; 1 = both without picking, or asks; 0 = says no.",
+      "exclude": [
+        "(isn'?t|not|no) (yet )?(live|available|supported)|not (offered )?in French"
+      ]
+    },
+    {
+      "id": "dashboard-login",
+      "category": "held-out-2",
+      "via": "channel",
+      "user": "UPRIYA0001",
+      "text": "how do people log in to the merchant dashboard?",
+      "include": [
+        "SSO|Okta"
+      ],
+      "judge": "The auth page says dashboards use OAuth; a newer Q4 note (2026-11-19) says login moved to SSO through Okta and OAuth login was removed. 2 = SSO/Okta as current; 1 = both without picking, or asks; 0 = only OAuth."
+    },
+    {
+      "id": "kyc-docs",
+      "category": "held-out-2",
+      "via": "channel",
+      "user": "UJONAS0001",
+      "text": "who keeps merchants' KYC documents?",
+      "include": [
+        "Onfido"
+      ],
+      "judge": "An older page says KYC documents are kept by the compliance team; a newer Q4 note (2026-11-19) says KYC moved to Onfido and documents are stored there. 2 = Onfido as current; 1 = both without picking, or asks; 0 = only the compliance team."
+    }
+  ]
+}
