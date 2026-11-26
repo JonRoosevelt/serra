@@ -12,7 +12,7 @@ import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import test, { after, type TestContext } from 'node:test';
 import { createAcpBackend } from '../src/agent/acp.ts';
 import { KNOWN_ACP_AGENTS } from '../src/agent/acp-agents.ts';
@@ -75,6 +75,8 @@ const repository = (t: TestContext): string => {
       const path = line.startsWith('worktree ') ? line.slice(9) : null;
       if (path && path !== repo && existsSync(path) && (path.includes('/.t3/worktrees/') || path.includes('/.serra/worktrees/'))) rmSync(path, { recursive: true, force: true });
     }
+    // And the per-project folder they were made in.
+    for (const root of [join(homedir(), '.t3/worktrees'), join(homedir(), '.serra/worktrees')]) rmSync(join(root, basename(repo)), { recursive: true, force: true });
     rmSync(repo, { recursive: true, force: true });
   });
   return repo;
