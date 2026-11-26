@@ -7,13 +7,15 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, 
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test, { type TestContext } from 'node:test';
-import { createAcpBackend, type AcpAgent } from '../src/agent/acp.ts';
-import { agentChoices, readAgentBackend, writeAgentBackend } from '../src/agent/acp-agents.ts';
+import { createAcpBackend } from '../src/agent/acp.ts';
+import { agentChoices, KNOWN_ACP_AGENTS, launchFor, readAgentBackend, writeAgentBackend, type AcpAgent } from '../src/agent/acp-agents.ts';
 import { createMeetingRuns } from '../src/meeting-runs.ts';
 import { pollUntilSettled, worktreeRun, type AgentBackend, type RunDetail, type WaitOptions } from '../src/agent/backend.ts';
 import { createT3Backend } from '../src/agent/t3.ts';
 import type { T3Session } from '../src/t3-session.ts';
 import { createFakeT3 } from './fakes/t3.ts';
+
+const agentChoicesAgent = (id: string): AcpAgent => KNOWN_ACP_AGENTS.find((agent) => agent.id === id)!;
 
 /** A backend under test, and the agent's side of it: end the running turn with `text`. */
 interface ContractSubject {
@@ -157,6 +159,11 @@ const fakeAcp = (t?: TestContext) => {
 const execAgent: NonNullable<Parameters<typeof createAcpBackend>[0]['spawnAgent']> = (chosen, env) =>
   spawn(chosen.command, chosen.args, { stdio: ['pipe', 'pipe', 'pipe'], env: { ...env, ...chosen.env }, detached: true });
 
+/** Waits for `done`, up to 10 s: the fake agent is a process of its own, slow to answer when the suite runs in parallel. */
+const until = async (done: () => boolean): Promise<void> => {
+  for (const end = Date.now() + 10_000; !done() && Date.now() < end;) await new Promise((resolve) => { setTimeout(resolve, 5); });
+};
+
 const alive = (child: ChildProcess): boolean => child.exitCode === null && child.signalCode === null;
 
 backendContract('ACP', async () => {
@@ -174,7 +181,7 @@ test('ACP: a read-only run refuses every permission request and counts it as wai
   const backend = fake.backend();
   try {
     const guarded = await backend.start({ workspace: { kind: 'folder', path: fake.dir, name: 'x' }, title: 'g', brief: 'ASK:read', readOnly: true });
-    for (let n = 0; n < 200 && fake.read('permission-1') === null; n += 1) await new Promise((resolve) => { setTimeout(resolve, 5); });
+    await until(() => fake.read('permission-1') !== null);
     assert.equal(fake.read('permission-1'), 'no', 'even a read is refused in a read-only run');
     assert.equal(fake.read(`mode-${guarded}`), 'read-only', 'an agent with a read-only mode is put in it');
     assert.equal((await backend.read(guarded)).thread.pendingRequestCount, 1, 'a meeting run sees it and stops the run, as on T3');
@@ -185,7 +192,7 @@ test('ACP: a read-only run refuses every permission request and counts it as wai
     for (const [kind, answer] of [['read', 'yes'], ['search', 'yes'], ['edit', 'no'], ['execute', 'no'], ['delete', 'no'], ['move', 'no'], ['switch_mode', 'no']] as const) {
       const threadId = await backend.start({ workspace: { kind: 'folder', path: fake.dir, name: 'x' }, title: kind, brief: `ASK:${kind}` });
       const turn = Number(threadId.split('-')[1]);
-      for (let n = 0; n < 200 && fake.read(`permission-${turn}`) === null; n += 1) await new Promise((resolve) => { setTimeout(resolve, 5); });
+      await until(() => fake.read(`permission-${turn}`) !== null);
       assert.equal(fake.read(`permission-${turn}`), answer, `${kind} is ${answer === 'yes' ? 'allowed' : 'refused'}`);
       fake.reply('ok', turn);
       await backend.wait(threadId, { ...fast, after: null });
@@ -281,11 +288,22 @@ test('the agent backend choice: T3 until the owner picks an installed ACP agent;
   assert.deepEqual(readAgentBackend(dir), { backend: 't3', agent: null, custom: [] });
   const bin = join(dir, 'bin');
   mkdirSync(bin);
-  writeFileSync(join(bin, 'claude-agent-acp'), '#!/bin/sh\n', { mode: 0o755 });
+  writeFileSync(join(bin, 'claude'), '#!/bin/sh\n', { mode: 0o755 });
   writeFileSync(join(dir, 'agent-backend.json'), JSON.stringify({ agents: [{ id: 'mine', name: 'My agent', command: 'my-acp', args: ['--stdio'], env: { MY_TOKEN: 'xoxb-1111-2222-fixturevalue' } }] }));
   const choices = agentChoices(readAgentBackend(dir), bin);
   assert.deepEqual(choices.map((choice) => [choice.id, choice.installed]), [['claude', true], ['codex', false], ['opencode', false], ['gemini', false], ['mine', false]]);
   assert.doesNotMatch(JSON.stringify(choices), /fixturevalue/, 'the picker never carries an agent\'s env');
+  assert.equal(agentChoices(readAgentBackend(dir), join(dir, 'empty'))[0]!.installed, false, 'no `claude` CLI, no Claude Code');
+  // Claude Code is the adapter Serra ships, run by this Node on the owner's own `claude`: nothing to install but Claude Code.
+  const claude = launchFor(agentChoicesAgent('claude'), bin);
+  assert.ok(!('missing' in claude));
+  assert.equal(claude.command, process.execPath);
+  assert.match(claude.args[0]!, /node_modules\/@agentclientprotocol\/claude-agent-acp\/dist\/index\.js$/);
+  assert.deepEqual(claude.env, { ELECTRON_RUN_AS_NODE: '1', CLAUDE_CODE_EXECUTABLE: join(bin, 'claude') });
+  writeFileSync(join(bin, 'codex'), '#!/bin/sh\n', { mode: 0o755 });
+  const codex = launchFor(agentChoicesAgent('codex'), bin);
+  assert.ok(!('missing' in codex) && codex.env.CODEX_PATH === join(bin, 'codex') && /codex-acp\/dist\/index\.js$/.test(codex.args[0]!));
+  assert.match(JSON.stringify(launchFor(agentChoicesAgent('opencode'), bin)), /can't find `opencode`/, 'OpenCode and Gemini are the agents themselves, found on PATH');
   assert.throws(() => writeAgentBackend(dir, { backend: 'acp' }), /Pick an ACP agent/);
   assert.deepEqual(writeAgentBackend(dir, { backend: 'acp', agent: 'claude' }).backend, 'acp');
   assert.equal(readAgentBackend(dir).custom.length, 1, 'the owner\'s own agents are kept');

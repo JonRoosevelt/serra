@@ -19,21 +19,12 @@ import { spawn, type ChildProcess } from 'node:child_process';
 import { Readable, Writable } from 'node:stream';
 import * as acp from '@agentclientprotocol/sdk';
 import { pollUntilSettled, type AgentBackend, type BackendCapabilities, type RunDetail, type RunToolCall, type StartRun } from './backend.ts';
+import { launchFor, type AcpAgent } from './acp-agents.ts';
 import { makeWorktree } from './worktree.ts';
 
 const ACP_CAPABILITIES: BackendCapabilities = {
   steer: false, worktrees: false, persistentRuns: false, transcriptLink: false, readOnly: true, toolResults: true,
 };
-
-/** One ACP agent the owner can pick: a command that speaks ACP on stdio. */
-export interface AcpAgent {
-  id: string;
-  name: string;
-  command: string;
-  args: string[];
-  /** Extra environment for the agent. Never a secret in Serra's code: the owner's own file or shell holds those. */
-  env?: Record<string, string>;
-}
 
 /** Tool kinds a run that isn't read-only may use without asking the owner. Everything else is refused. */
 const ALLOWED_KINDS = new Set<acp.ToolKind>(['read', 'search', 'fetch', 'think', 'other']);
@@ -94,9 +85,15 @@ const toolOutput = (record: ToolRecord): unknown => {
   return texts.length ? { content: texts } : undefined;
 };
 
-/** In a process group of its own, so `close()` stops the agent and everything it started (an adapter runs its CLI). */
-const defaultSpawn = (agent: AcpAgent, env: NodeJS.ProcessEnv): ChildProcess =>
-  spawn(agent.command, agent.args, { stdio: ['pipe', 'pipe', 'pipe'], env: { ...env, ...agent.env }, detached: true });
+/**
+ * Starts the agent from the PATH in its environment: its own command, or a bundled adapter run by this Node on the
+ * owner's CLI. In a process group of its own, so `close()` stops the agent and everything it started (the CLI).
+ */
+const defaultSpawn = (agent: AcpAgent, env: NodeJS.ProcessEnv): ChildProcess => {
+  const launch = launchFor(agent, env.PATH ?? '');
+  if ('missing' in launch) throw new Error(launch.missing);
+  return spawn(launch.command, launch.args, { stdio: ['pipe', 'pipe', 'pipe'], env: { ...env, ...agent.env, ...launch.env }, detached: true });
+};
 
 /** Signals the agent's process group, else the agent alone. */
 const signal = (running: ChildProcess, name: NodeJS.Signals): void => {
@@ -161,7 +158,11 @@ export const createAcpBackend = ({ agent, env = async () => process.env, worktre
 
   /** Starts the agent and says hello, once. */
   const connect = (): Promise<acp.ClientConnection> => (connection ??= (async () => {
-    const started = spawnAgent(agent, await env());
+    let started: ChildProcess;
+    try { started = spawnAgent(agent, await env()); } catch (error) {
+      exited = error instanceof Error ? error.message : String(error);
+      throw new Error(exited);
+    }
     child = started;
     started.stderr?.on('data', (chunk: Buffer) => { stderr = `${stderr}${chunk.toString()}`.slice(-4000); });
     const gone = new Promise<never>((_resolve, reject) => {

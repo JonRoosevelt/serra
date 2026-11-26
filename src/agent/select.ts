@@ -2,8 +2,8 @@
 // run, so a change applies to the next one without a restart. T3 when nothing is chosen. Only meeting runs (and so
 // the weekly knowledge review) follow the choice for now; Slack jobs and app tasks stay on T3.
 import { loginEnvironment } from '../shell-path.ts';
-import { createAcpBackend, type AcpAgent } from './acp.ts';
-import { acpAgents, findCommand, readAgentBackend } from './acp-agents.ts';
+import { createAcpBackend } from './acp.ts';
+import { acpAgents, launchFor, readAgentBackend, type AcpAgent } from './acp-agents.ts';
 import type { AgentBackend } from './backend.ts';
 import { createT3Backend } from './t3.ts';
 
@@ -30,8 +30,8 @@ export const chosenBackend = (profileDir: string, { t3Bin, log }: { t3Bin: strin
 
 /** Who runs meetings on an ACP agent, for Settings › Meetings: read from files and PATH, never a model call. */
 export const acpRunner = async (agent: AcpAgent): Promise<{ label: string; model: null; ready: boolean; detail: string }> => {
-  const installed = findCommand(agent.command, (await loginEnvironment()).path) !== null;
-  return installed
-    ? { label: `${agent.name} (ACP)`, model: null, ready: true, detail: `Runs on ${agent.name} over ACP, on its own login and default model, in Serra’s own empty folder. A run in progress ends if Serra restarts.` }
-    : { label: `${agent.name} (ACP)`, model: null, ready: false, detail: `Serra can’t find \`${agent.command}\`. Install ${agent.name}’s ACP adapter, or pick T3.` };
+  const launch = launchFor(agent, (await loginEnvironment()).path);
+  return 'missing' in launch
+    ? { label: `${agent.name} (ACP)`, model: null, ready: false, detail: `${launch.missing} Or pick T3.` }
+    : { label: `${agent.name} (ACP)`, model: null, ready: true, detail: `Runs on ${agent.name} over ACP, on its own login and default model, in Serra’s own empty folder. A run in progress ends if Serra restarts.` };
 };

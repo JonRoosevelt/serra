@@ -2,9 +2,9 @@
 // read-only kind the weekly knowledge review makes, through a real ACP agent and then through T3, with each reply and
 // how long it took. Uses the owner's own logins; spends a little of their plan. Not part of `pnpm test`.
 //
-//   node evals/acp-live.ts                       Claude Code over ACP (Zed's adapter, fetched by npx), then T3
-//   node evals/acp-live.ts --acp codex --skip-t3  another agent from src/agent/acp-agents.ts, on PATH
-//   node evals/acp-live.ts --command "npx -y @agentclientprotocol/claude-agent-acp@0.102.0"
+//   node evals/acp-live.ts                       Claude Code over ACP (the adapter Serra ships, on your `claude`), then T3
+//   node evals/acp-live.ts --acp codex --skip-t3  another agent from src/agent/acp-agents.ts
+//   node evals/acp-live.ts --command "some-acp-agent --stdio"   any ACP command on PATH instead
 //
 // Every agent process it starts is stopped when its run ends; the script checks none is left.
 import { execFileSync } from 'node:child_process';
@@ -12,8 +12,9 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { parseArgs } from 'node:util';
-import { createAcpBackend, type AcpAgent } from '../src/agent/acp.ts';
-import { KNOWN_ACP_AGENTS } from '../src/agent/acp-agents.ts';
+import { createAcpBackend } from '../src/agent/acp.ts';
+import { KNOWN_ACP_AGENTS, launchFor, type AcpAgent } from '../src/agent/acp-agents.ts';
+import { loginEnvironment } from '../src/shell-path.ts';
 import type { AgentBackend } from '../src/agent/backend.ts';
 import { createMeetingRuns } from '../src/meeting-runs.ts';
 
@@ -25,14 +26,16 @@ const { values: args } = parseArgs({
   },
 });
 
-/** Zed's Claude Code adapter, pinned, run through npx: nothing is installed globally. */
-const CLAUDE_VIA_NPX = 'npx -y @agentclientprotocol/claude-agent-acp@0.102.0';
-
 const known = KNOWN_ACP_AGENTS.find((agent) => agent.id === args.acp);
 if (!known) throw new Error(`No ACP agent "${args.acp}".`);
-const commandLine = args.command ?? (args.acp === 'claude' ? CLAUDE_VIA_NPX : [known.command, ...known.args].join(' '));
-const [command, ...rest] = commandLine.split(' ');
-const agent: AcpAgent = { ...known, command: command!, args: rest };
+const [command, ...rest] = (args.command ?? '').split(' ');
+const agent: AcpAgent = args.command ? { id: 'custom', name: command!, command: command!, args: rest } : known;
+// The owner's login environment, as the daemon gives an agent (src/agent/select.ts).
+const login = await loginEnvironment();
+const env = { ...(login.env ?? process.env), PATH: login.path };
+const launch = launchFor(agent, login.path);
+if ('missing' in launch) throw new Error(launch.missing);
+const commandLine = [launch.command, ...launch.args].join(' ');
 
 const PROMPT = [
   'Three notes from a team knowledge base:',
@@ -61,12 +64,12 @@ const ask = async (label: string, backend?: () => AgentBackend): Promise<void> =
 };
 
 await ask(`${agent.name} over ACP (${commandLine})`, () => createAcpBackend({
-  agent,
+  agent, env: async () => env,
   log: (line) => console.log(`  · ${line}`),
 }));
 if (!args['skip-t3']) await ask('T3 (its default provider and model)');
 
 // Nothing the ACP run started may still be running.
 let left = '';
-try { left = execFileSync('pgrep', ['-fl', agent.command === 'npx' ? 'claude-agent-acp' : agent.command], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim(); } catch { /* pgrep exits 1 when nothing matches */ }
+try { left = execFileSync('pgrep', ['-fl', agent.bundled ? agent.bundled.package : agent.command], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim(); } catch { /* pgrep exits 1 when nothing matches */ }
 console.log(left ? `Still running:\n${left}` : 'No ACP agent process left running.');
