@@ -28,6 +28,14 @@ the weekly review. A job keeps the backend it started on, so switching never mov
 - **Steering.** ACP has no way to add to a turn that's going, so a message waits for the turn to end.
 - **Worktrees.** Serra makes them itself, in `~/.serra/worktrees/`. Jobs › Clean up only removes T3's for now.
 
+## Images
+
+- **In:** a screenshot sent in Slack is saved in the profile's `attachments/` and its path given to the agent, as on
+  T3. An ACP agent that takes images also gets the image itself. One that doesn't gets the path only, and Serra says
+  so in the thread.
+- **Out:** an image the agent saves and names in its reply is uploaded to the thread, as on T3. An image an ACP agent
+  sends inline is saved and uploaded the same way.
+
 ## Permissions
 
 Never wider than T3 gives the same kind of run:

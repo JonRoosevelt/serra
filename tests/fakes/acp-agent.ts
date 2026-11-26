@@ -4,7 +4,8 @@
 // answer to `permission-<n>`. A prompt with `TOOL:<id>` records a tool call that read meeting <id>. A cancel ends the
 // running turn with `cancelled`. `FAIL:<kind>` fails the turn with that error kind. `ELICIT` asks a form question like
 // Claude Code's AskUserQuestion and writes the answer to `elicit-<n>`. `session/load` reopens a session (writes
-// `load-<id>`). Run: node tests/fakes/acp-agent.ts
+// `load-<id>`). Images a prompt carries are written to `images-<n>` (their MIME types); `IMAGE_OUT` sends a PNG back.
+// FAKE_ACP_NO_IMAGES: the agent says it takes no images. Run: node tests/fakes/acp-agent.ts
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { Readable, Writable } from 'node:stream';
@@ -29,7 +30,7 @@ const waitFor = async (file: string, sessionId: string): Promise<string | null> 
 };
 
 const app = acp.agent({ name: 'fake-acp' })
-  .onRequest(acp.methods.agent.initialize, () => ({ protocolVersion: acp.PROTOCOL_VERSION, agentCapabilities: { loadSession: true } }))
+  .onRequest(acp.methods.agent.initialize, () => ({ protocolVersion: acp.PROTOCOL_VERSION, agentCapabilities: { loadSession: true, promptCapabilities: { image: !process.env.FAKE_ACP_NO_IMAGES } } }))
   .onRequest(acp.methods.agent.session.new, ({ params }) => {
     const session = next('session');
     writeFileSync(join(dir, `session-${session}`), params.cwd);
@@ -51,6 +52,13 @@ const app = acp.agent({ name: 'fake-acp' })
     const turn = next('turn');
     cancelled.delete(params.sessionId);
     const text = params.prompt.map((block) => (block.type === 'text' ? block.text : '')).join('');
+    const images = params.prompt.flatMap((block) => (block.type === 'image' ? [block.mimeType] : []));
+    if (images.length) writeFileSync(join(dir, `images-${turn}`), images.join(','));
+    if (text.includes('IMAGE_OUT')) {
+      // A 1×1 PNG.
+      const png = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg==';
+      await client.notify(acp.methods.client.session.update, { sessionId: params.sessionId, update: { sessionUpdate: 'agent_message_chunk', content: { type: 'image', data: png, mimeType: 'image/png' } } });
+    }
     // FAIL:<kind> fails the turn the way Claude Code's adapter does, with its error kind and raw text that quotes the brief.
     const fail = /FAIL:(\w+)/.exec(text)?.[1];
     if (fail) throw acp.RequestError.internalError({ errorKind: fail }, `SECRET-TRANSCRIPT ${text.slice(0, 40)}`);

@@ -20,6 +20,7 @@ import { recordKnowledgeUse, takeKnowledgeUsed } from './knowledge-usage.ts';
 import { slackKey, type createStore } from './state.ts';
 import { worktreeRun, type AgentBackend, type QuestionRequest } from './agent/backend.ts';
 import { singleBackend, type AgentBackends } from './agent/pool.ts';
+import { attachedImages } from './agent/images.ts';
 import { createT3Backend } from './agent/t3.ts';
 import { findThreads, jobThreadInput, run, sendToThread, showThread, startThread } from './t3.ts';
 import { answerQuestion, listQuestions, type T3QuestionRequest } from './t3-questions.ts';
@@ -172,6 +173,13 @@ export const createBot = ({
   const agentOf = (job: Pick<Job, 'backend'>): AgentBackend => agents.get(job.backend ?? 't3');
   /** A job's questions: none on a backend that has no way to show them. */
   const questionsOf = (job: Pick<Job, 'backend'>) => agentOf(job).questions ?? { list: async (): Promise<QuestionRequest[]> => [], answer: async (): Promise<void> => {} };
+
+  /** Tells the thread when an image in `text` went to an agent that can't see images: it only has the path. Never throws. */
+  const warnImages = async (agent: AgentBackend, channel: string, threadTs: string, text: string): Promise<void> => {
+    if (!agent.images || !attachedImages(text, join(config.profileDir, 'attachments')).length) return;
+    const sees = await agent.images().catch(() => false);
+    if (!sees) await notify(channel, threadTs, { kind: 'images-unsupported', agent: agent.label }).catch((error: unknown) => logger.warn(`Couldn't say ${agent.label} can't see images: ${errorMessage(error)}`));
+  };
 
   /** Paths a reply may name. Inside these, a local path is shown from the repository root. */
   const pathRoots = { repos: [config.project, ...config.repositories.map((repo) => repo.path)], worktrees: [join(homedir(), '.t3/worktrees'), join(homedir(), '.serra/worktrees')] };
@@ -359,6 +367,7 @@ export const createBot = ({
     if (earlier) logger.info(`Carrying on in T3 thread ${earlier}, started for ${msg.channel}:${msg.threadTs} before a restart.`);
     const agent = agents.current();
     const threadId = earlier ?? await agent.start(worktreeRun(input));
+    await warnImages(agent, msg.channel, msg.threadTs, request);
 
     putJob(slackKey(msg.channel, msg.threadTs), {
       threadId,
@@ -970,7 +979,11 @@ export const createBot = ({
       if (!job) return;
       const loadingRequested = lines.some((line) => line.audience === 'bot');
       if (loadingRequested) await setLoading(job.channel, job.threadTs, true);
-      if (!(await restartIfRevoked(key, job, lines))) await agentOf(job).send(job.threadId, followUpMessage(lines));
+      if (!(await restartIfRevoked(key, job, lines))) {
+        const message = followUpMessage(lines);
+        await agentOf(job).send(job.threadId, message);
+        await warnImages(agentOf(job), job.channel, job.threadTs, message);
+      }
       // The reply just posted took every 👀 with it. These messages are only now with the worker, so they get theirs back.
       const waiting = lines.filter((line) => line.audience !== 'others').map((line) => line.ts);
       for (const ts of waiting) await setEyes(job.channel, ts, true);

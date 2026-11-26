@@ -31,6 +31,7 @@ import {
   pollUntilSettled, type AgentBackend, type BackendCapabilities, type QuestionAnswers, type QuestionRequest, type RunDetail, type RunToolCall, type StartRun,
 } from './backend.ts';
 import { launchFor, type AcpAgent } from './acp-agents.ts';
+import { attachedImages, imageContent, saveAgentImage } from './images.ts';
 import { makeWorktree } from './worktree.ts';
 
 /** Tool kinds an `ask` run may use without asking anyone. Everything else is refused. */
@@ -67,6 +68,8 @@ export interface AcpBackendOptions {
   worktreeRoot?: string;
   /** Where runs are recorded, for their transcript and to carry them on after a restart. None: runs live in memory. */
   runsDir?: string;
+  /** Serra's attachments folder: an image listed in a message from here also goes to the agent as an image. */
+  attachmentsDir?: string;
   /** The model the owner picked for this agent; the agent's own default when absent. */
   model?: string;
   /** Starts the agent; a test passes a fake agent's command. */
@@ -246,7 +249,7 @@ export const readRunRecord = (runsDir: string, sessionId: string): RunRecord | n
 };
 
 export const createAcpBackend = ({
-  agent, env = async () => process.env, worktreeRoot, runsDir, model, spawnAgent = defaultSpawn, log = () => {}, mcpServers = [], now = () => new Date(),
+  agent, env = async () => process.env, worktreeRoot, runsDir, attachmentsDir, model, spawnAgent = defaultSpawn, log = () => {}, mcpServers = [], now = () => new Date(),
 }: AcpBackendOptions): AgentBackend => {
   const sessions = new Map<string, Session>();
   /** Sessions being reopened after a restart, so two reads don't load one twice. */
@@ -313,7 +316,11 @@ export const createAcpBackend = ({
       const update = params.update;
       const runId = current.active ?? `run-${current.record.runs}`;
       // Serra keeps the reply, the tool calls and the cost; plans, thoughts and modes it doesn't need.
-      if (update.sessionUpdate === 'agent_message_chunk') current.reply += textOf(update.content);
+      if (update.sessionUpdate === 'agent_message_chunk' && update.content.type === 'image') {
+        // An image the agent sends: saved where replies share images from, and embedded, so the chat uploads it.
+        const embed = saveAgentImage(update.content.data, update.content.mimeType, `${current.sessionId}-${runId}-${current.tools.size}-${current.reply.length}`);
+        current.reply += embed ? `\n\n${embed}\n\n` : `\n\n_(${agent.name} sent an image Serra can't show: ${update.content.mimeType})_\n\n`;
+      } else if (update.sessionUpdate === 'agent_message_chunk') current.reply += textOf(update.content);
       else if (update.sessionUpdate === 'usage_update' && update.cost) current.cost = { amount: update.cost.amount, currency: update.cost.currency };
       else if (update.sessionUpdate === 'tool_call') {
         current.tools.set(update.toolCallId, { id: update.toolCallId, runId, title: update.title, kind: update.kind ?? null, status: update.status ?? null, rawInput: update.rawInput, rawOutput: update.rawOutput, content: update.content });
@@ -429,6 +436,12 @@ export const createAcpBackend = ({
     return new Error(`${agent.name}: ${text.slice(0, 300)}`);
   };
 
+  /** A message as ACP content: its text, and each image attached to it when the agent takes images. */
+  const promptFor = (text: string): acp.ContentBlock[] => {
+    const images = attachmentsDir && hello?.agentCapabilities?.promptCapabilities?.image ? attachedImages(text, attachmentsDir) : [];
+    return [{ type: 'text', text }, ...images.flatMap((image) => { const block = imageContent(image); return block ? [block] : []; })];
+  };
+
   /** Runs one prompt turn, then the next queued message, if any. `runId` carries on a turn a restart cut off. */
   const turn = (current: Session, text: string, carryOn?: string): void => {
     let runId = carryOn;
@@ -446,7 +459,7 @@ export const createAcpBackend = ({
       const open = await connect().catch((error: unknown) => { current.failed = plain(error).message; return null; });
       if (open) {
         try {
-          const done = await open.agent.request(acp.methods.agent.session.prompt, { sessionId: current.sessionId, prompt: [{ type: 'text', text }] });
+          const done = await open.agent.request(acp.methods.agent.session.prompt, { sessionId: current.sessionId, prompt: promptFor(text) });
           if (done.stopReason !== 'end_turn') log(`${agent.name}'s turn ${runId} ended: ${done.stopReason}.`);
         } catch (error) {
           // The agent went away mid-turn (its exit can come just after the broken pipe): with a record, the turn is
@@ -590,6 +603,10 @@ export const createAcpBackend = ({
     list: async () => [],
     settle: async (threadId) => { sessions.delete(threadId); },
     toolCall,
+    images: async () => {
+      await connect().catch((error: unknown) => { throw plain(error); });
+      return hello?.agentCapabilities?.promptCapabilities?.image === true;
+    },
     questions: {
       list: async (threadId) => [...(await session(threadId)).waiting.values()].map((waiting) => structuredClone(waiting.request)),
       answer: async (threadId, requestId, answers) => {

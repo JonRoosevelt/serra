@@ -55,7 +55,7 @@ export const createBackendPool = ({ profileDir, t3, log = () => {}, makeAcp = cr
     const agent = acpAgents(settings).find((entry) => entry.id === id);
     if (!agent) throw new Error(`Serra has no ACP agent "${id}" any more. Add it back in agent-backend.json to carry on its threads.`);
     const model = settings.models[agent.id];
-    const backend = makeAcp({ agent, env: agentEnv, runsDir: agentRunsDir(profileDir), log, ...(model ? { model } : {}) });
+    const backend = makeAcp({ agent, env: agentEnv, runsDir: agentRunsDir(profileDir), attachmentsDir: join(profileDir, 'attachments'), log, ...(model ? { model } : {}) });
     acp.set(key, backend);
     return backend;
   };

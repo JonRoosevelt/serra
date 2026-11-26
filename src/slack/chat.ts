@@ -101,6 +101,7 @@ export const createSlackChat = ({ client, owner, botUserId, botToken, profileDir
         ? `${mention(owner)} I'm waiting for you in the Serra app: answer it in Jobs › Transcript. It's a question Slack cannot display. Messages here reach me once it's answered.`
         : `${mention(owner)} I'm waiting for you in T3: ${notice.link ? `<${notice.link}|answer it there>` : 'answer it there'}. `
         + 'It needs an action there, such as a token, an approval, or a question Slack cannot display. Messages here reach me once it\'s answered.';
+      case 'images-unsupported': return `${notice.agent.replace(/[<>&*_~`|]/g, '')} can't see images, so it only got the file's path.`;
       case 'question-hint': return QUESTION_HINTS[notice.hint];
     }
   };

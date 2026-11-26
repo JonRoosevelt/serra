@@ -76,6 +76,8 @@ export type Notice =
   /** The worker waits for something only T3 can show (a token, an approval, a form too big for the chat). */
   /** `where`: the app's Jobs screen, for a backend with no web link to answer in (ACP); absent: T3. */
   | { kind: 'waiting-in-t3'; link: T3Link | null; where?: 'app' }
+  /** An image someone sent reached an agent that can't see images: it only has the file's path. */
+  | { kind: 'images-unsupported'; agent: string }
   /** Feedback on an answer to a question card. */
   | { kind: 'question-hint'; hint: 'choose' | 'invalid-answer' | 'changed' | 'not-sent' | 'unconfirmed' };
 

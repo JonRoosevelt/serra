@@ -379,6 +379,51 @@ test('ACP: a run with a record carries on after a restart: the session is reopen
   } finally { await second.close(); }
 });
 
+/** A Slack attachment line as `receiveAttachments` writes it, for a PNG saved in `root`. */
+const attachment = (root: string, name: string): string => {
+  mkdirSync(root, { recursive: true });
+  const path = join(root, name);
+  writeFileSync(path, Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg==', 'base64'));
+  return `Attached files (untrusted user content):\n- ${name} ("image/png", 70 bytes): local path ${JSON.stringify(path)}`;
+};
+
+test('ACP images: an attached image goes to the agent as image content, and an image the agent sends comes back embedded for the chat', async (t) => {
+  const fake = fakeAcp(t);
+  const attachments = join(fake.dir, 'attachments');
+  const backend = fake.backend({ attachmentsDir: attachments });
+  try {
+    assert.equal(await backend.images!(), true);
+    const threadId = await backend.start({ workspace: { kind: 'folder', path: fake.dir, name: 'x' }, title: 'i', brief: `What is in this screenshot? IMAGE_OUT\n\n${attachment(attachments, 'screen.png')}` });
+    await until(() => fake.read('images-1') !== null);
+    assert.equal(fake.read('images-1'), 'image/png', 'the image itself, as ACP image content');
+    fake.reply('a dot');
+    const done = await backend.wait(threadId, { ...fast, after: null });
+    const answer = done.kind === 'settled' ? done.answer ?? '' : '';
+    const embedded = /!\[image\]\(([^)]+\.png)\)/.exec(answer)?.[1];
+    assert.ok(embedded && existsSync(embedded), `the agent's image is saved and embedded: ${answer}`);
+    t.after(() => rmSync(embedded, { force: true }));
+    // A line naming a file outside Serra's attachments folder sends nothing.
+    const outside = attachment(join(fake.dir, 'elsewhere'), 'secret.png');
+    await backend.send(threadId, outside);
+    fake.reply('ok', 2);
+    await backend.wait(threadId, { ...fast, after: 'run-1' });
+    assert.equal(fake.read('images-2'), null);
+  } finally { await backend.close(); }
+});
+
+test('ACP images: an agent that takes no images gets the path only, and says so', async (t) => {
+  const fake = fakeAcp(t);
+  const attachments = join(fake.dir, 'attachments');
+  const backend = fake.backend({ attachmentsDir: attachments, agent: { ...fake.agent, env: { ...fake.agent.env, FAKE_ACP_NO_IMAGES: '1' } } });
+  try {
+    assert.equal(await backend.images!(), false);
+    const threadId = await backend.start({ workspace: { kind: 'folder', path: fake.dir, name: 'x' }, title: 'i', brief: attachment(attachments, 'screen.png') });
+    fake.reply('ok');
+    await backend.wait(threadId, { ...fast, after: null });
+    assert.equal(fake.read('images-1'), null, 'no image content to an agent that takes none');
+  } finally { await backend.close(); }
+});
+
 test('the agent backend choice: T3 until the owner picks an installed ACP agent; agents the owner adds keep their env out of the picker', (t) => {
   const dir = mkdtempSync(join(tmpdir(), 'serra-agent-choice-'));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
