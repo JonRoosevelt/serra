@@ -249,6 +249,23 @@ test('ACP: an agent that starts in a mode that never asks (Claude Code\'s auto) 
   } finally { await permissive.close(); }
 });
 
+test('ACP on Codex\'s modes: read-only and ask runs go in its read-only mode, job runs in its full access', async (t) => {
+  // Codex's ACP adapter (@agentclientprotocol/codex-acp 2.6.0) offers these modes and starts in `agent` (auto review).
+  const codexModes = { currentModeId: 'agent', availableModes: [{ id: 'read-only', name: 'Read-only' }, { id: 'workspace-write', name: 'Workspace access' }, { id: 'agent', name: 'Auto review' }, { id: 'agent-full-access', name: 'Full access' }] };
+  const fake = fakeAcp(t);
+  const backend = fake.backend({ agent: { ...fake.agent, env: { ...fake.agent.env, FAKE_ACP_MODES: JSON.stringify(codexModes) } } });
+  const repo = join(fake.dir, 'repo');
+  mkdirSync(repo);
+  execFileSync('git', ['-C', repo, 'init', '-q', '-b', 'main']);
+  execFileSync('git', ['-C', repo, '-c', 'user.name=You', '-c', 'user.email=you@example.com', 'commit', '-q', '--allow-empty', '-m', 'start']);
+  try {
+    const readOnly = await backend.start({ workspace: { kind: 'folder', path: fake.dir, name: 'x' }, title: 'r', brief: 'x', readOnly: true });
+    const ask = await backend.start({ workspace: { kind: 'folder', path: fake.dir, name: 'x' }, title: 'a', brief: 'x' });
+    const job = await backend.start({ workspace: { kind: 'worktree', project: repo, baseRef: 'main', branch: 'serra/codex' }, title: 'j', brief: 'x' });
+    assert.deepEqual([fake.read(`mode-${readOnly}`), fake.read(`mode-${ask}`), fake.read(`mode-${job}`)], ['read-only', 'read-only', 'agent-full-access']);
+  } finally { await backend.close(); }
+});
+
 test('ACP: a missing agent command is a plain sentence, and a worktree run gets a worktree Serra made', async (t) => {
   const fake = fakeAcp(t);
   const missing = createAcpBackend({ agent: { id: 'gone', name: 'Gone Agent', command: join(fake.dir, 'no-such-agent'), args: [] } });
