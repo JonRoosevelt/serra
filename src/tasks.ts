@@ -15,6 +15,8 @@ import { codeRoot, loadConfig, writeFileAtomic, type Config } from './config.ts'
 import { createKnowledge } from './knowledge.ts';
 import { parseJson } from './lib/guards.ts';
 import { APP_PROPOSALS_FOLDER, stampProposalsFolder } from './proposals.ts';
+import { worktreeRun, type AgentBackend } from './agent/backend.ts';
+import { createT3Backend } from './agent/t3.ts';
 import { jobThreadInput, run, showThread, startThread, threadPullRequest } from './t3.ts';
 import type { StartThreadInput } from './types.ts';
 
@@ -105,6 +107,8 @@ const taskThreadInput = (config: Config, request: string, now: Date = new Date()
 export interface TaskDeps {
   startThread?: typeof startThread;
   showThread?: typeof showThread;
+  /** The agent backend the task runs on. T3 (over `startThread`/`showThread`) when absent: Jobs reads tasks from T3. */
+  agent?: AgentBackend;
   /** Brings the base branch up to date first, as the daemon does before every job. */
   fetchBase?: (config: Config) => Promise<unknown>;
   now?: () => Date;
@@ -133,9 +137,10 @@ export const startTask = async (profileDir: string, request: unknown, deps: Task
 /** Starts `input`'s thread and records it in `tasks.json`: what a task and the knowledge interview share. */
 const startRecorded = async (profileDir: string, config: Config, input: StartThreadInput, {
   startThread: start = startThread, showThread: show = showThread, fetchBase: fetch = fetchBase, now = () => new Date(),
+  agent = createT3Backend({ bin: config.t3Bin, cli: { startThread: start, showThread: show } }),
 }: TaskDeps): Promise<StartedTask> => {
   await fetch(config);
-  const t3ThreadId = await start(input, config.t3Bin);
+  const t3ThreadId = await agent.start(worktreeRun(input));
   const task: AppTask = {
     t3ThreadId,
     title: input.title.slice(config.name.length + 2),
@@ -148,7 +153,7 @@ const startRecorded = async (profileDir: string, config: Config, input: StartThr
   } catch (error) {
     throw new Error(`Started T3 thread ${t3ThreadId}, but couldn't record it for Jobs: ${error instanceof Error ? error.message : String(error)}`);
   }
-  const link = await show(t3ThreadId, config.t3Bin).then((detail) => detail.thread.link, () => undefined);
+  const link = await agent.read(t3ThreadId).then((detail) => detail.thread.link, () => undefined);
   return { ...task, ...(link ? { link } : {}) };
 };
 

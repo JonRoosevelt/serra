@@ -18,6 +18,8 @@ import { createProfileReloader } from './profile-reload.ts';
 import { handleReviewRequest, type PostReview } from './review.ts';
 import { recordKnowledgeUse, takeKnowledgeUsed } from './knowledge-usage.ts';
 import { slackKey, type createStore } from './state.ts';
+import { worktreeRun, type AgentBackend } from './agent/backend.ts';
+import { createT3Backend } from './agent/t3.ts';
 import { findThreads, jobThreadInput, run, sendToThread, showThread, startThread } from './t3.ts';
 import { answerQuestion, listQuestions, type T3QuestionRequest } from './t3-questions.ts';
 import { FOLLOW_UP_MS, follow, followed, forgetRun, looksRunning, replied, RECENT_MESSAGES, seeRun, seenRun, settle, step, stopWaiting, waitFor, waitStep, withProgress, type PollStep } from './lifecycle.ts';
@@ -119,6 +121,8 @@ export interface BotDeps {
   loadKnowledge?: (visibility: Visibility) => BriefKnowledge;
   logger: { info(message: string): void; warn(message: string): void; error(message: string): void; debug(message: string): void };
   t3?: { startThread: typeof startThread; sendToThread: typeof sendToThread; showThread: typeof showThread; findThreads?: typeof findThreads };
+  /** The agent backend jobs run on. T3 (over `t3`) when absent: Slack jobs need worktrees and runs that outlive Serra. */
+  agent?: AgentBackend;
   questions?: { listQuestions: typeof listQuestions; answerQuestion: typeof answerQuestion };
   /** Brings the base branch up to date before a worktree is made from it. */
   fetchBase?: () => Promise<unknown>;
@@ -137,6 +141,7 @@ export interface BotDeps {
 export const createBot = ({
   config, chat, deliver, store, loadIndex, loadKnowledge, logger,
   t3 = { startThread, sendToThread, showThread, findThreads },
+  agent = createT3Backend({ bin: config.t3Bin, cli: t3 }),
   questions = { listQuestions, answerQuestion },
   fetchBase = () => run('git', ['-C', config.project, 'fetch', config.remote, '--quiet']),
   share = shareImages,
@@ -297,13 +302,12 @@ export const createBot = ({
    * permalink a single candidate is taken; two are too ambiguous, so a new thread starts.
    */
   const earlierThread = async (title: string, attemptedAt: string, permalink: string | undefined): Promise<string | null> => {
-    if (!t3.findThreads) return null;
     const followed = new Set(allJobs().map(([, job]) => job.t3ThreadId));
     const since = new Date(Date.parse(attemptedAt) - 60_000).toISOString();
-    const candidates = (await t3.findThreads(config.project, title, since, config.t3Bin)).filter((id) => !followed.has(id));
+    const candidates = (await agent.list({ project: config.project, title, since })).filter((id) => !followed.has(id));
     if (!permalink) return candidates.length === 1 ? candidates[0]! : null;
     for (const id of candidates) {
-      const { messages } = await t3.showThread(id, config.t3Bin, RECENT_MESSAGES);
+      const { messages } = await agent.read(id, RECENT_MESSAGES);
       if (messages.some((message) => message.role === 'user' && message.text?.includes(permalink))) return id;
     }
     return null;
@@ -343,7 +347,7 @@ export const createBot = ({
       })
       : null;
     if (earlier) logger.info(`Carrying on in T3 thread ${earlier}, started for ${msg.channel}:${msg.threadTs} before a restart.`);
-    const t3ThreadId = earlier ?? await t3.startThread(input, config.t3Bin);
+    const t3ThreadId = earlier ?? await agent.start(worktreeRun(input));
 
     putJob(slackKey(msg.channel, msg.threadTs), {
       t3ThreadId,
@@ -815,7 +819,7 @@ export const createBot = ({
   const pollJob = async (key: string): Promise<void> => {
     const job = getJob(key);
     if (!job) return;
-    const observed = await t3.showThread(job.t3ThreadId, config.t3Bin, RECENT_MESSAGES);
+    const observed = await agent.read(job.t3ThreadId, RECENT_MESSAGES);
     const { thread, messages } = observed;
     let next = step(job, observed);
     if (next.do === 'post' && next.missed) {
@@ -928,7 +932,7 @@ export const createBot = ({
       brief: fillBrief(config, knowledge, { proposalsFolder: threadProposalsFolder(job.channel, job.threadTs), request: `${followUpMessage(lines)}${earlier}\n\nThe thread's earlier messages from ${config.name} are left out here, because some knowledge they used is no longer available.`, requester: 'People in the thread', permalink: 'link unavailable', thread }),
       now: new Date(now()),
     });
-    const t3ThreadId = await t3.startThread({ ...input, ...(job.branch ? { baseRef: job.branch } : {}) }, config.t3Bin);
+    const t3ThreadId = await agent.start(worktreeRun({ ...input, ...(job.branch ? { baseRef: job.branch } : {}) }));
     updateJob(key, () => ({ t3ThreadId, visibility, knowledgeRead: knowledge.read, knowledgeDir: knowledge.readDir, branch: input.branch, lastPostedRunId: null, nextTurnWaits: lines.some((line) => line.audience === 'bot'), delivering: undefined, phase: { state: 'following' } }));
     await notify(job.channel, job.threadTs, { kind: 'fresh-session' });
     logger.info(`${folderGone ? 'The knowledge folder this thread read was cleaned up' : `Knowledge this thread used was taken back (${revoked.length} page(s))`}; continued ${key} in a fresh T3 thread ${t3ThreadId}`);
@@ -943,7 +947,7 @@ export const createBot = ({
     busy: async (key) => {
       const job = getJob(key);
       if (!job) return false;
-      const { thread } = await t3.showThread(job.t3ThreadId, config.t3Bin);
+      const { thread } = await agent.read(job.t3ThreadId);
       return thread.activeRunId !== null || (thread.pendingRequestCount ?? 0) > 0;
     },
     flush: (key, lines) => exclusive(key, async () => {
@@ -953,7 +957,7 @@ export const createBot = ({
       if (!job) return;
       const loadingRequested = lines.some((line) => line.audience === 'bot');
       if (loadingRequested) await setLoading(job.channel, job.threadTs, true);
-      if (!(await restartIfRevoked(key, job, lines))) await t3.sendToThread(job.t3ThreadId, followUpMessage(lines), config.t3Bin);
+      if (!(await restartIfRevoked(key, job, lines))) await agent.send(job.t3ThreadId, followUpMessage(lines));
       // The reply just posted took every 👀 with it. These messages are only now with the worker, so they get theirs back.
       const waiting = lines.filter((line) => line.audience !== 'others').map((line) => line.ts);
       for (const ts of waiting) await setEyes(job.channel, ts, true);
@@ -1113,7 +1117,7 @@ export const createBot = ({
     if (leftover) await clearProgress(key, job);
     const saved = getJob(key) ?? job;
     if (!leftover && !looksRunning({ ...saved, pendingReactions: pendingReactions(saved) })) return;
-    const { thread } = await t3.showThread(saved.t3ThreadId, config.t3Bin);
+    const { thread } = await agent.read(saved.t3ThreadId);
     // Going or waiting in T3: the poll follows it from here.
     if (thread.activeRunId || (thread.pendingRequestCount ?? 0) > 0) {
       updateJob(key, (latest) => ({ phase: follow(latest.phase) }));
