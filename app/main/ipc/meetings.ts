@@ -91,7 +91,7 @@ export const meetingsHandlers = (context: HandlerContext, options: MeetingsHandl
     },
     agentBackend: async (): Promise<AgentBackendView> => {
       const settings = readAgentBackend(context.profileDir());
-      return { backend: settings.backend, agent: settings.agent, agents: agentChoices(settings, await toolSearchPath()) };
+      return { backend: settings.backend, agent: settings.agent, agents: agentChoices(settings, await toolSearchPath()), models: settings.models };
     },
     setAgentBackend: async (choice): Promise<AgentBackendView> => {
       if (!isRecord(choice) || (choice.backend !== 't3' && choice.backend !== 'acp')) throw new Error('Pick T3 or an ACP agent.');
@@ -99,8 +99,9 @@ export const meetingsHandlers = (context: HandlerContext, options: MeetingsHandl
       const path = await toolSearchPath();
       const settings = readAgentBackend(context.profileDir());
       if (agent && !agentChoices(settings, path).some((entry) => entry.id === agent && entry.installed)) throw new Error('That ACP agent isn’t installed on this Mac.');
-      const saved = writeAgentBackend(context.profileDir(), { backend: choice.backend, agent });
-      return { backend: saved.backend, agent: saved.agent, agents: agentChoices(saved, path) };
+      if (choice.model !== undefined && typeof choice.model !== 'string') throw new Error('That isn’t a model name.');
+      const saved = writeAgentBackend(context.profileDir(), { backend: choice.backend, agent, ...(typeof choice.model === 'string' ? { model: choice.model } : {}) });
+      return { backend: saved.backend, agent: saved.agent, agents: agentChoices(saved, path), models: saved.models };
     },
     list: () => store().listMeetings(),
     history: () => store().history(),

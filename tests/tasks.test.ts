@@ -93,11 +93,12 @@ test('startTask starts the T3 thread through the real startThread, with the brie
   assert.deepEqual(show!.args, ['thread', 'show', '--messages', '1', '--json', 'task-thread']);
 
   assert.deepEqual(task, {
-    t3ThreadId: 'task-thread', title: 'Update the onboarding page for the new pricing and open a PR', branch: start!.args[5],
+    threadId: 'task-thread', title: 'Update the onboarding page for the new pricing and open a PR', branch: start!.args[5],
     requester: 'Alex', createdAt: NOW.toISOString(), link: 'https://t3.test/task-thread',
   });
   const { link: _link, ...recordedTask } = task;
   assert.deepEqual(readTasks(profileDir), [recordedTask]);
+  assert.equal(JSON.parse(readFileSync(join(profileDir, 'tasks.json'), 'utf8'))[0].t3ThreadId, 'task-thread', 'a T3 task keeps t3ThreadId for a rollback');
   assert.equal(readFileSync(join(profileDir, 'state.json'), 'utf8'), stateBefore, "the daemon's state.json is never written");
   assert.ok(!JSON.stringify(task).includes('xoxb') && !readFileSync(tasksPath(profileDir), 'utf8').includes('xoxb'));
 });
@@ -220,7 +221,7 @@ test('IPC: start returns the task without any token, refuses a double start, and
   await assert.rejects(Promise.resolve(handlers.start('another')), /already starting/);
   release();
   const task = await first;
-  assert.equal(task.t3ThreadId, 'task-thread');
+  assert.equal(task.threadId, 'task-thread');
   assert.ok(!JSON.stringify(task).includes('xoxb-fixture') && !JSON.stringify(task).includes('xapp-fixture'));
   await assert.rejects(Promise.resolve().then(() => handlers.start('')), /Write what/);
 

@@ -164,6 +164,16 @@ const until = async (done: () => boolean): Promise<void> => {
   for (const end = Date.now() + 10_000; !done() && Date.now() < end;) await new Promise((resolve) => { setTimeout(resolve, 5); });
 };
 
+/** The first question card a thread waits on, once there is one (up to 10 s). */
+const waitingOn = async (backend: AgentBackend, threadId: string) => {
+  let found: Awaited<ReturnType<NonNullable<AgentBackend['questions']>['list']>>[number] | undefined;
+  for (const end = Date.now() + 10_000; !found && Date.now() < end;) {
+    [found] = await backend.questions!.list(threadId);
+    if (!found) await new Promise((resolve) => { setTimeout(resolve, 5); });
+  }
+  return found;
+};
+
 const alive = (child: ChildProcess): boolean => child.exitCode === null && child.signalCode === null;
 
 backendContract('ACP', async () => {
@@ -220,7 +230,7 @@ test('ACP: a tool\'s own result is read back from the run, a stop ends the turn,
   assert.equal(fake.children.length, 1, 'one agent process for every run of a backend');
   await backend.close();
   assert.equal(alive(fake.children[0]!), false, 'close stops the agent');
-  await assert.rejects(backend.read(threadId), /end when Serra restarts/, 'its runs are gone with it');
+  await assert.rejects(backend.read(threadId), /ended when Serra restarted/, 'its runs are gone with it');
 });
 
 test('ACP: an agent that starts in a mode that never asks (Claude Code\'s auto) is moved to one that asks; read-only refuses to start without one', async (t) => {
@@ -296,10 +306,66 @@ test('ACP: a failed turn says why in a fixed sentence (usage limit, sign-in), ne
   assert.ok(Date.now() - started < 10_000, `took ${Date.now() - started} ms`);
 });
 
+test('ACP: a job run gets the agent\'s full access, as on T3; what it still asks, and its questions, wait as question cards', async (t) => {
+  const fake = fakeAcp(t);
+  const claudeLike = { currentModeId: 'auto', availableModes: [{ id: 'default', name: 'Manual' }, { id: 'acceptEdits', name: 'Accept edits' }, { id: 'auto', name: 'Auto' }, { id: 'bypassPermissions', name: 'Bypass' }] };
+  const backend = fake.backend({ agent: { ...fake.agent, env: { ...fake.agent.env, FAKE_ACP_MODES: JSON.stringify(claudeLike) } } });
+  const repo = join(fake.dir, 'repo');
+  mkdirSync(repo);
+  execFileSync('git', ['-C', repo, 'init', '-q', '-b', 'main']);
+  execFileSync('git', ['-C', repo, '-c', 'user.name=You', '-c', 'user.email=you@example.com', 'commit', '-q', '--allow-empty', '-m', 'start']);
+  try {
+    const threadId = await backend.start({ workspace: { kind: 'worktree', project: repo, baseRef: 'main', branch: 'serra/job' }, title: 'job', brief: 'ASK:execute ELICIT' });
+    assert.equal(fake.read(`mode-${threadId}`), 'bypassPermissions', 'full access, like a T3 job');
+    const request = await waitingOn(backend, threadId);
+    assert.ok(request, 'the permission request waits for a person');
+    assert.equal(request.questions[0]!.question, 'Fake Agent wants to: a execute tool');
+    assert.deepEqual(request.questions[0]!.options.map((option) => option.label), ['Allow', 'Deny']);
+    assert.equal((await backend.read(threadId)).thread.pendingRequestCount, 1, 'the job waits on it, as on T3');
+    await backend.questions!.answer(threadId, request.requestId, { permission: 'yes' });
+    await until(() => fake.read('permission-1') !== null);
+    assert.equal(fake.read('permission-1'), 'yes');
+    // The agent's question, as Claude Code asks it: a form with an "Other" box.
+    const form = await waitingOn(backend, threadId);
+    assert.deepEqual(form!.questions, [{ id: 'question_0', header: 'Colour', question: 'Which colour?', options: [{ label: 'Red', description: 'warm', value: 'Red' }, { label: 'Blue', description: '', value: 'Blue' }], allowCustomAnswer: true }]);
+    await backend.questions!.answer(threadId, form!.requestId, { question_0: 'Green, please' });
+    await until(() => fake.read('elicit-1') !== null);
+    assert.deepEqual(JSON.parse(fake.read('elicit-1')!), { action: 'accept', content: { question_0_custom: 'Green, please' } }, 'a typed answer goes in the Other box');
+    fake.reply('done');
+    const done = await backend.wait(threadId, { ...fast, after: null });
+    assert.ok(done.kind === 'settled' && done.answer === 'done');
+  } finally { await backend.close(); }
+});
+
+test('ACP: a run with a record carries on after a restart: the session is reopened and the cut-off turn answered', async (t) => {
+  const fake = fakeAcp(t);
+  const runsDir = join(fake.dir, 'runs');
+  const first = fake.backend({ runsDir });
+  const threadId = await first.start({ workspace: { kind: 'folder', path: fake.dir, name: 'x' }, title: 'Serra: hello', brief: 'Say hello.' });
+  fake.reply('hello');
+  const settled = await first.wait(threadId, { ...fast, after: null });
+  assert.ok(settled.kind === 'settled');
+  await first.send(threadId, 'And again, slowly.');
+  await until(() => fake.read('count-turn') === '2');
+  await first.close();
+  assert.equal(fake.children.every((child) => !alive(child)), true, 'Serra stopped, and the agent with it');
+
+  const second = fake.backend({ runsDir });
+  try {
+    const reopened = await second.read(threadId, 10);
+    assert.equal(fake.read(`load-${threadId}`), fake.dir, 'reopened with session/load in its folder');
+    assert.equal(reopened.thread.activeRunId, 'run-2', 'the cut-off turn carries on');
+    assert.deepEqual(reopened.messages.map((message) => [message.role, message.runId, message.text]), [['user', 'run-1', 'Say hello.'], ['assistant', 'run-1', 'hello'], ['user', 'run-2', 'And again, slowly.']]);
+    fake.reply('hello again', 3);
+    const after = await second.wait(threadId, { ...fast, after: 'run-1' });
+    assert.ok(after.kind === 'settled' && after.runId === 'run-2' && after.answer === 'hello again');
+  } finally { await second.close(); }
+});
+
 test('the agent backend choice: T3 until the owner picks an installed ACP agent; agents the owner adds keep their env out of the picker', (t) => {
   const dir = mkdtempSync(join(tmpdir(), 'serra-agent-choice-'));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
-  assert.deepEqual(readAgentBackend(dir), { backend: 't3', agent: null, custom: [] });
+  assert.deepEqual(readAgentBackend(dir), { backend: 't3', agent: null, custom: [], models: {} });
   const bin = join(dir, 'bin');
   mkdirSync(bin);
   writeFileSync(join(bin, 'claude'), '#!/bin/sh\n', { mode: 0o755 });

@@ -4,6 +4,7 @@
 // backend whose `capabilities` cover what it needs, and says so plainly when one doesn't.
 //
 // Pure: types and small helpers only, no `node:` values.
+import type { T3Answers, T3QuestionRequest } from '../t3-questions.ts';
 import type { StartThreadInput } from '../types.ts';
 
 type BackendId = 't3' | 'acp';
@@ -92,8 +93,14 @@ export type WaitOutcome =
   | { kind: 'pending'; detail: RunDetail }
   | { kind: 'timeout'; detail: RunDetail };
 
+/** Questions and approvals a run waits on, as Slack question cards show them. */
+export type QuestionRequest = T3QuestionRequest;
+export type QuestionAnswers = T3Answers;
+
 export interface AgentBackend {
   readonly id: BackendId;
+  /** Which backend this is, as a job records it: `t3`, or `acp:<agent id>`. */
+  readonly key: string;
   /** The backend's name as copy shows it: "T3", or the ACP agent's name. */
   readonly label: string;
   readonly capabilities: BackendCapabilities;
@@ -116,6 +123,11 @@ export interface AgentBackend {
   settle: (threadId: string) => Promise<void>;
   /** The last tool call of run `runId` whose record mentions `match`, or null. Only with `capabilities.toolResults`. */
   toolCall?: (threadId: string, runId: string, match: string) => Promise<RunToolCall | null>;
+  /** The questions and approvals a thread waits on, and answering one. Absent: the backend has none to show. */
+  questions?: {
+    list: (threadId: string) => Promise<QuestionRequest[]>;
+    answer: (threadId: string, requestId: string, answers: QuestionAnswers) => Promise<void>;
+  };
   /** Lets go of whatever the backend holds open (a session, an agent process). Never throws. */
   close: () => Promise<void>;
 }

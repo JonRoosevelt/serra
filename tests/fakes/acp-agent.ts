@@ -2,7 +2,9 @@
 // test playing the model. Each prompt turn (numbered across processes) waits for the test to write `turn-<n>` in FAKE_ACP_DIR, then streams that
 // file's text as the reply. A prompt with `ASK:<kind>` first asks permission for a tool of that kind, and writes the
 // answer to `permission-<n>`. A prompt with `TOOL:<id>` records a tool call that read meeting <id>. A cancel ends the
-// running turn with `cancelled`. `FAIL:<kind>` fails the turn with that error kind. Run: node tests/fakes/acp-agent.ts
+// running turn with `cancelled`. `FAIL:<kind>` fails the turn with that error kind. `ELICIT` asks a form question like
+// Claude Code's AskUserQuestion and writes the answer to `elicit-<n>`. `session/load` reopens a session (writes
+// `load-<id>`). Run: node tests/fakes/acp-agent.ts
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { Readable, Writable } from 'node:stream';
@@ -27,13 +29,18 @@ const waitFor = async (file: string, sessionId: string): Promise<string | null> 
 };
 
 const app = acp.agent({ name: 'fake-acp' })
-  .onRequest(acp.methods.agent.initialize, () => ({ protocolVersion: acp.PROTOCOL_VERSION, agentCapabilities: {} }))
+  .onRequest(acp.methods.agent.initialize, () => ({ protocolVersion: acp.PROTOCOL_VERSION, agentCapabilities: { loadSession: true } }))
   .onRequest(acp.methods.agent.session.new, ({ params }) => {
     const session = next('session');
     writeFileSync(join(dir, `session-${session}`), params.cwd);
     // FAKE_ACP_MODES: the agent's modes as JSON, like Claude Code's (starting in `auto`); a default and a read-only mode otherwise.
     const modes = process.env.FAKE_ACP_MODES ? JSON.parse(process.env.FAKE_ACP_MODES) as acp.SessionModeState : { currentModeId: 'default', availableModes: [{ id: 'default', name: 'Default' }, { id: 'read-only', name: 'Read only' }] };
     return { sessionId: `session-${session}`, modes };
+  })
+  .onRequest(acp.methods.agent.session.load, ({ params }) => {
+    writeFileSync(join(dir, `load-${params.sessionId}`), params.cwd);
+    const modes = process.env.FAKE_ACP_MODES ? JSON.parse(process.env.FAKE_ACP_MODES) as acp.SessionModeState : { currentModeId: 'default', availableModes: [{ id: 'default', name: 'Default' }, { id: 'read-only', name: 'Read only' }] };
+    return { modes };
   })
   .onRequest(acp.methods.agent.session.setMode, ({ params }) => {
     writeFileSync(join(dir, `mode-${params.sessionId}`), params.modeId);
@@ -55,6 +62,16 @@ const app = acp.agent({ name: 'fake-acp' })
         options: [{ optionId: 'yes', name: 'Allow', kind: 'allow_once' }, { optionId: 'no', name: 'Reject', kind: 'reject_once' }],
       });
       writeFileSync(join(dir, `permission-${turn}`), answer.outcome.outcome === 'selected' ? answer.outcome.optionId : 'cancelled');
+    }
+    if (text.includes('ELICIT')) {
+      const answer = await client.request(acp.methods.client.elicitation.create, {
+        sessionId: params.sessionId, mode: 'form', message: 'Which colour?',
+        requestedSchema: { type: 'object', properties: {
+          question_0: { type: 'string', title: 'Colour', oneOf: [{ const: 'Red', title: 'Red', description: 'warm' }, { const: 'Blue', title: 'Blue' }] },
+          question_0_custom: { type: 'string', title: 'Other' },
+        } },
+      } as acp.CreateElicitationRequest);
+      writeFileSync(join(dir, `elicit-${turn}`), JSON.stringify(answer));
     }
     const tool = /TOOL:([\w-]+)/.exec(text)?.[1] ?? /meeting with ID "([\w-]+)"/.exec(text)?.[1];
     if (tool) {

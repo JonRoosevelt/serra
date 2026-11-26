@@ -8,6 +8,7 @@
 import { realpathSync } from 'node:fs';
 import { isRecord, parseJson } from '../json-guards.ts';
 import { ensureProject, findThreads, sendToThread, showThread, startFolderThread, startThread } from '../t3.ts';
+import { answerQuestion, listQuestions } from '../t3-questions.ts';
 import { openT3Session, type T3Session } from '../t3-session.ts';
 import { pollUntilSettled, type AgentBackend, type BackendCapabilities, type RunToolCall, type StartRun } from './backend.ts';
 
@@ -38,6 +39,8 @@ export interface T3BackendOptions {
   cli?: T3Cli;
   /** Opens a session on T3's tool endpoint; a real one, revoked on `close()`, when absent. */
   session?: () => Promise<T3Session>;
+  /** T3's question bridge (Slack question cards); the real one when absent. */
+  questions?: { listQuestions: typeof listQuestions; answerQuestion: typeof answerQuestion };
 }
 
 const missing = (what: string): Error => new Error(`Serra's T3 layer can't ${what} here.`);
@@ -46,6 +49,7 @@ export const createT3Backend = ({
   bin,
   cli = { startThread, startFolderThread, showThread, sendToThread, findThreads, ensureProject },
   session: openSession = () => openT3Session({ bin }),
+  questions = { listQuestions, answerQuestion },
 }: T3BackendOptions): AgentBackend => {
   let opened: Promise<T3Session> | null = null;
   const session = (): Promise<T3Session> => (opened ??= openSession());
@@ -134,7 +138,12 @@ export const createT3Backend = ({
 
   return {
     id: 't3',
+    key: 't3',
     label: 'T3',
+    questions: {
+      list: (threadId) => questions.listQuestions(threadId, bin),
+      answer: (threadId, requestId, answers) => questions.answerQuestion(threadId, requestId, answers, bin),
+    },
     capabilities: T3_CAPABILITIES,
     start,
     send: async (threadId, message, { mode = 'queue' } = {}) => {

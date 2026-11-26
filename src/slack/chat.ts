@@ -97,7 +97,9 @@ export const createSlackChat = ({ client, owner, botUserId, botToken, profileDir
       case 'unconfirmed': return UNCONFIRMED;
       case 'setup-problem': return `${SETUP_NOTICE_START}: ${notice.problem === 'bad-token' ? 'my Slack app\'s token isn\'t accepted' : 'my Slack app is missing a permission'}. I've told my owner how to fix it, and I'll answer here once it's done.`;
       case 'fresh-session': return 'Some knowledge this thread used has changed, so I\'m carrying on in a fresh session.';
-      case 'waiting-in-t3': return `${mention(owner)} I'm waiting for you in T3: ${notice.link ? `<${notice.link}|answer it there>` : 'answer it there'}. `
+      case 'waiting-in-t3': return notice.where === 'app'
+        ? `${mention(owner)} I'm waiting for you in the Serra app: answer it in Jobs › Transcript. It's a question Slack cannot display. Messages here reach me once it's answered.`
+        : `${mention(owner)} I'm waiting for you in T3: ${notice.link ? `<${notice.link}|answer it there>` : 'answer it there'}. `
         + 'It needs an action there, such as a token, an approval, or a question Slack cannot display. Messages here reach me once it\'s answered.';
       case 'question-hint': return QUESTION_HINTS[notice.hint];
     }

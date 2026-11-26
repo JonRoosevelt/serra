@@ -38,6 +38,8 @@ const realRoots = (roots: string[]): string[] => roots.flatMap((root) => {
 const ALLOWED_ROOTS = realRoots([
   `${homedir()}/.codex/generated_images`,
   `${homedir()}/.t3/worktrees`,
+  // Worktrees Serra makes for a job on an ACP agent (src/agent/worktree.ts).
+  `${homedir()}/.serra/worktrees`,
   `${homedir()}/.claude/qa-runs`,
   `${homedir()}/.codex/qa-runs`,
   tmpdir(),
@@ -52,6 +54,7 @@ const ALLOWED_ROOTS = realRoots([
  */
 const FILE_ROOTS = realRoots([
   `${homedir()}/.t3/worktrees`,
+  `${homedir()}/.serra/worktrees`,
   `${homedir()}/.claude/qa-runs`,
   `${homedir()}/.codex/qa-runs`,
   '/tmp',

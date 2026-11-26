@@ -18,7 +18,8 @@ import { createProfileReloader } from './profile-reload.ts';
 import { handleReviewRequest, type PostReview } from './review.ts';
 import { recordKnowledgeUse, takeKnowledgeUsed } from './knowledge-usage.ts';
 import { slackKey, type createStore } from './state.ts';
-import { worktreeRun, type AgentBackend } from './agent/backend.ts';
+import { worktreeRun, type AgentBackend, type QuestionRequest } from './agent/backend.ts';
+import { singleBackend, type AgentBackends } from './agent/pool.ts';
 import { createT3Backend } from './agent/t3.ts';
 import { findThreads, jobThreadInput, run, sendToThread, showThread, startThread } from './t3.ts';
 import { answerQuestion, listQuestions, type T3QuestionRequest } from './t3-questions.ts';
@@ -121,8 +122,11 @@ export interface BotDeps {
   loadKnowledge?: (visibility: Visibility) => BriefKnowledge;
   logger: { info(message: string): void; warn(message: string): void; error(message: string): void; debug(message: string): void };
   t3?: { startThread: typeof startThread; sendToThread: typeof sendToThread; showThread: typeof showThread; findThreads?: typeof findThreads };
-  /** The agent backend jobs run on. T3 (over `t3`) when absent: Slack jobs need worktrees and runs that outlive Serra. */
-  agent?: AgentBackend;
+  /**
+   * The agent backends jobs run on: `current()` starts new jobs (the owner's choice), `get(key)` follows a job on the
+   * backend it started on. T3 alone (over `t3` and `questions`) when absent.
+   */
+  agents?: AgentBackends;
   questions?: { listQuestions: typeof listQuestions; answerQuestion: typeof answerQuestion };
   /** Brings the base branch up to date before a worktree is made from it. */
   fetchBase?: () => Promise<unknown>;
@@ -141,8 +145,8 @@ export interface BotDeps {
 export const createBot = ({
   config, chat, deliver, store, loadIndex, loadKnowledge, logger,
   t3 = { startThread, sendToThread, showThread, findThreads },
-  agent = createT3Backend({ bin: config.t3Bin, cli: t3 }),
   questions = { listQuestions, answerQuestion },
+  agents = singleBackend(createT3Backend({ bin: config.t3Bin, cli: t3, questions })),
   fetchBase = () => run('git', ['-C', config.project, 'fetch', config.remote, '--quiet']),
   share = shareImages,
   reviewRequest = handleReviewRequest,
@@ -164,8 +168,13 @@ export const createBot = ({
     if (job) putJob(key, { ...job, ...change(job) });
   };
 
+  /** The backend a job runs on: the one it started on. */
+  const agentOf = (job: Pick<Job, 'backend'>): AgentBackend => agents.get(job.backend ?? 't3');
+  /** A job's questions: none on a backend that has no way to show them. */
+  const questionsOf = (job: Pick<Job, 'backend'>) => agentOf(job).questions ?? { list: async (): Promise<QuestionRequest[]> => [], answer: async (): Promise<void> => {} };
+
   /** Paths a reply may name. Inside these, a local path is shown from the repository root. */
-  const pathRoots = { repos: [config.project, ...config.repositories.map((repo) => repo.path)], worktrees: [join(homedir(), '.t3/worktrees')] };
+  const pathRoots = { repos: [config.project, ...config.repositories.map((repo) => repo.path)], worktrees: [join(homedir(), '.t3/worktrees'), join(homedir(), '.serra/worktrees')] };
 
   /** A person's name as the chat shows it, safe to use as a speaker label. */
   const displayName = async (user: PersonId): Promise<string> => speakerName(await chat.displayName(user));
@@ -302,7 +311,8 @@ export const createBot = ({
    * permalink a single candidate is taken; two are too ambiguous, so a new thread starts.
    */
   const earlierThread = async (title: string, attemptedAt: string, permalink: string | undefined): Promise<string | null> => {
-    const followed = new Set(allJobs().map(([, job]) => job.t3ThreadId));
+    const agent = agents.current();
+    const followed = new Set(allJobs().map(([, job]) => job.threadId));
     const since = new Date(Date.parse(attemptedAt) - 60_000).toISOString();
     const candidates = (await agent.list({ project: config.project, title, since })).filter((id) => !followed.has(id));
     if (!permalink) return candidates.length === 1 ? candidates[0]! : null;
@@ -347,10 +357,12 @@ export const createBot = ({
       })
       : null;
     if (earlier) logger.info(`Carrying on in T3 thread ${earlier}, started for ${msg.channel}:${msg.threadTs} before a restart.`);
-    const t3ThreadId = earlier ?? await agent.start(worktreeRun(input));
+    const agent = agents.current();
+    const threadId = earlier ?? await agent.start(worktreeRun(input));
 
     putJob(slackKey(msg.channel, msg.threadTs), {
-      t3ThreadId,
+      threadId,
+      ...(agent.key === 't3' ? {} : { backend: agent.key }),
       channel: msg.channel,
       threadTs: msg.threadTs,
       requester: msg.user,
@@ -367,8 +379,8 @@ export const createBot = ({
       createdAt: new Date(now()).toISOString(),
       lastActivityAt: new Date(now()).toISOString(),
     });
-    logger.info(`Started T3 thread ${t3ThreadId} for ${msg.channel}:${msg.threadTs}`);
-    events('job_started', { key: slackKey(msg.channel, msg.threadTs), t3ThreadId, requester: msg.user });
+    logger.info(`Started ${agent.label} thread ${threadId} for ${msg.channel}:${msg.threadTs}`);
+    events('job_started', { key: slackKey(msg.channel, msg.threadTs), t3ThreadId: threadId, requester: msg.user });
   };
 
   /** One job's chat-facing work runs one step at a time, so a poll and a follow-up can't both post the same run. */
@@ -552,7 +564,7 @@ export const createBot = ({
       else {
         const shared = await share(review.reply, uploadFor(job));
         uploaded = shared !== review.reply;
-        markdown = localLinksToText(shared, pathRoots).trim() || '(No reply text. Check the T3 thread.)';
+        markdown = localLinksToText(shared, pathRoots).trim() || (agentOf(job).key === 't3' ? '(No reply text. Check the T3 thread.)' : '(No reply text. Check the transcript in Serra › Jobs.)');
       }
     }
     // The owner is pinged for a new blocker, and cc'd once so they follow a thread someone else started. Not on every reply.
@@ -699,8 +711,8 @@ export const createBot = ({
     const check = loadKnowledge ? await revocation(job) : null;
     if (check?.unknown) return;
     if (check && check.revoked.length > 0) {
-      await questions.answerQuestion(job.t3ThreadId, request.requestId, Object.fromEntries(request.questions.map((item) => [item.id, 'Stop here: some knowledge you used has been made private. Do nothing more.'])), config.t3Bin)
-        .catch((error: unknown) => logger.warn(`Could not stop the question in ${job.t3ThreadId}: ${errorMessage(error)}`));
+      await questionsOf(job).answer(job.threadId, request.requestId, Object.fromEntries(request.questions.map((item) => [item.id, 'Stop here: some knowledge you used has been made private. Do nothing more.'])))
+        .catch((error: unknown) => logger.warn(`Could not stop the question in ${job.threadId}: ${errorMessage(error)}`));
       await notify(job.channel, job.threadTs, { kind: 'withheld' });
       updateJob(key, () => ({ lastActivityAt: new Date(now()).toISOString() }));
       return;
@@ -721,7 +733,7 @@ export const createBot = ({
   const submitAnswer = async (key: string, job: Job, answer: QuestionAnswer, user: string, messageTs?: string): Promise<void> => {
     const state = cardOf(job);
     if (!state) return;
-    const pending = (await questions.listQuestions(job.t3ThreadId, config.t3Bin)).find((request) => request.requestId === state.requestId);
+    const pending = (await questionsOf(job).list(job.threadId)).find((request) => request.requestId === state.requestId);
     if (!pending || JSON.stringify(pending.questions) !== JSON.stringify(state.questions)) {
       await clearQuestion(key, job);
       await questionFeedback(job, 'changed');
@@ -774,7 +786,7 @@ export const createBot = ({
       updateJob(key, (latest) => ({ phase: waitFor(latest.phase, next), ...rememberReply(latest) }));
       return;
     }
-    await questions.answerQuestion(job.t3ThreadId, state.requestId, answers, config.t3Bin);
+    await questionsOf(job).answer(job.threadId, state.requestId, answers);
     updateJob(key, rememberReply);
     await clearQuestion(key, job, user, { ...state, answers });
     updateJob(key, (latest) => ({ phase: follow(latest.phase), loadingRequested: true, lastActivityAt: new Date(now()).toISOString() }));
@@ -805,10 +817,10 @@ export const createBot = ({
   /** Secrets, approvals and forms the chat cannot display stay in T3. Queued follow-ups wait for their resolution. */
   const postWaitingNotice = async (key: string, job: Job, thread: T3Thread): Promise<void> => {
     await setLoading(job.channel, job.threadTs, false, job.loadingRequested === true);
-    await notify(job.channel, job.threadTs, { kind: 'waiting-in-t3', link: t3LinkOf(thread.link) });
+    await notify(job.channel, job.threadTs, agentOf(job).capabilities.transcriptLink ? { kind: 'waiting-in-t3', link: t3LinkOf(thread.link) } : { kind: 'waiting-in-t3', link: null, where: 'app' });
     updateJob(key, (latest) => ({ phase: waitFor(latest.phase), ownerFollows: true, lastActivityAt: new Date(now()).toISOString() }));
-    logger.info(`T3 thread ${job.t3ThreadId} is waiting on a request; told the owner in ${key}`);
-    events('waiting_in_t3', { key, t3ThreadId: job.t3ThreadId });
+    logger.info(`T3 thread ${job.threadId} is waiting on a request; told the owner in ${key}`);
+    events('waiting_in_t3', { key, t3ThreadId: job.threadId });
     events('needs_owner', { key });
   };
 
@@ -819,7 +831,7 @@ export const createBot = ({
   const pollJob = async (key: string): Promise<void> => {
     const job = getJob(key);
     if (!job) return;
-    const observed = await agent.read(job.t3ThreadId, RECENT_MESSAGES);
+    const observed = await agentOf(job).read(job.threadId, RECENT_MESSAGES);
     const { thread, messages } = observed;
     let next = step(job, observed);
     if (next.do === 'post' && next.missed) {
@@ -831,7 +843,7 @@ export const createBot = ({
 
     if (next.do === 'wait') {
       await setLoading(latest.channel, latest.threadTs, false);
-      const requests = await questions.listQuestions(job.t3ThreadId, config.t3Bin).catch((error: unknown) => {
+      const requests = await questionsOf(job).list(job.threadId).catch((error: unknown) => {
         logger.debug(`Reading questions in ${key} failed: ${errorMessage(error)}`);
         return null;
       });
@@ -914,8 +926,8 @@ export const createBot = ({
     // before the thread's history is read for the fresh brief, so the question never reaches it.
     const open = cardOf(job);
     if (open) {
-      await questions.answerQuestion(job.t3ThreadId, open.requestId, Object.fromEntries(open.questions.map((item) => [item.id, 'Stop here: this thread moved to a fresh session. Do nothing more.'])), config.t3Bin)
-        .catch((error: unknown) => logger.warn(`Could not close the question in the earlier T3 thread ${job.t3ThreadId}: ${errorMessage(error)}`));
+      await questionsOf(job).answer(job.threadId, open.requestId, Object.fromEntries(open.questions.map((item) => [item.id, 'Stop here: this thread moved to a fresh session. Do nothing more.'])))
+        .catch((error: unknown) => logger.warn(`Could not close the question in the earlier T3 thread ${job.threadId}: ${errorMessage(error)}`));
       await clearQuestion(key, job, undefined, open, true);
     }
     // The old run's progress line is the old worker's words too: it goes now, with the card.
@@ -932,11 +944,12 @@ export const createBot = ({
       brief: fillBrief(config, knowledge, { proposalsFolder: threadProposalsFolder(job.channel, job.threadTs), request: `${followUpMessage(lines)}${earlier}\n\nThe thread's earlier messages from ${config.name} are left out here, because some knowledge they used is no longer available.`, requester: 'People in the thread', permalink: 'link unavailable', thread }),
       now: new Date(now()),
     });
-    const t3ThreadId = await agent.start(worktreeRun({ ...input, ...(job.branch ? { baseRef: job.branch } : {}) }));
-    updateJob(key, () => ({ t3ThreadId, visibility, knowledgeRead: knowledge.read, knowledgeDir: knowledge.readDir, branch: input.branch, lastPostedRunId: null, nextTurnWaits: lines.some((line) => line.audience === 'bot'), delivering: undefined, phase: { state: 'following' } }));
+    const agent = agentOf(job);
+    const threadId = await agent.start(worktreeRun({ ...input, ...(job.branch ? { baseRef: job.branch } : {}) }));
+    updateJob(key, () => ({ threadId, visibility, knowledgeRead: knowledge.read, knowledgeDir: knowledge.readDir, branch: input.branch, lastPostedRunId: null, nextTurnWaits: lines.some((line) => line.audience === 'bot'), delivering: undefined, phase: { state: 'following' } }));
     await notify(job.channel, job.threadTs, { kind: 'fresh-session' });
-    logger.info(`${folderGone ? 'The knowledge folder this thread read was cleaned up' : `Knowledge this thread used was taken back (${revoked.length} page(s))`}; continued ${key} in a fresh T3 thread ${t3ThreadId}`);
-    events('knowledge_revoked', { key, t3ThreadId });
+    logger.info(`${folderGone ? 'The knowledge folder this thread read was cleaned up' : `Knowledge this thread used was taken back (${revoked.length} page(s))`}; continued ${key} in a fresh ${agent.label} thread ${threadId}`);
+    events('knowledge_revoked', { key, t3ThreadId: threadId });
     return true;
   };
 
@@ -947,7 +960,7 @@ export const createBot = ({
     busy: async (key) => {
       const job = getJob(key);
       if (!job) return false;
-      const { thread } = await agent.read(job.t3ThreadId);
+      const { thread } = await agentOf(job).read(job.threadId);
       return thread.activeRunId !== null || (thread.pendingRequestCount ?? 0) > 0;
     },
     flush: (key, lines) => exclusive(key, async () => {
@@ -957,12 +970,12 @@ export const createBot = ({
       if (!job) return;
       const loadingRequested = lines.some((line) => line.audience === 'bot');
       if (loadingRequested) await setLoading(job.channel, job.threadTs, true);
-      if (!(await restartIfRevoked(key, job, lines))) await agent.send(job.t3ThreadId, followUpMessage(lines));
+      if (!(await restartIfRevoked(key, job, lines))) await agentOf(job).send(job.threadId, followUpMessage(lines));
       // The reply just posted took every 👀 with it. These messages are only now with the worker, so they get theirs back.
       const waiting = lines.filter((line) => line.audience !== 'others').map((line) => line.ts);
       for (const ts of waiting) await setEyes(job.channel, ts, true);
       updateJob(key, (latest) => ({ phase: follow(latest.phase), loadingRequested, nextTurnWaits: loadingRequested, lastActivityAt: new Date(now()).toISOString(), pendingReactionTs: null, pendingReactions: [...new Set([...pendingReactions(latest), ...waiting])] }));
-      logger.info(`Forwarded ${lines.length} thread message(s) to T3 thread ${getJob(key)?.t3ThreadId ?? job.t3ThreadId}`);
+      logger.info(`Forwarded ${lines.length} thread message(s) to T3 thread ${getJob(key)?.threadId ?? job.threadId}`);
     }),
     onError: async (key, error) => {
       const job = getJob(key);
@@ -1096,7 +1109,7 @@ export const createBot = ({
       for (const [key, job] of allJobs()) {
         if (!isDue(key, job, at)) continue;
         await exclusive(key, () => pollJob(key)).catch((error: unknown) => {
-          logger.error(`Polling ${key} (T3 thread ${job.t3ThreadId}) failed: ${errorMessage(error)}`);
+          logger.error(`Polling ${key} (T3 thread ${job.threadId}) failed: ${errorMessage(error)}`);
         });
       }
     } finally {
@@ -1117,7 +1130,7 @@ export const createBot = ({
     if (leftover) await clearProgress(key, job);
     const saved = getJob(key) ?? job;
     if (!leftover && !looksRunning({ ...saved, pendingReactions: pendingReactions(saved) })) return;
-    const { thread } = await agent.read(saved.t3ThreadId);
+    const { thread } = await agentOf(saved).read(saved.threadId);
     // Going or waiting in T3: the poll follows it from here.
     if (thread.activeRunId || (thread.pendingRequestCount ?? 0) > 0) {
       updateJob(key, (latest) => ({ phase: follow(latest.phase) }));
@@ -1137,8 +1150,8 @@ export const createBot = ({
     const cleared = await clearEyes(saved);
     await finishLoading(key, saved);
     updateJob(key, (latest) => ({ ...withoutReactions(latest, cleared), phase: settle() }));
-    logger.info(`${key} was saved as running, but T3 thread ${saved.t3ThreadId} isn't: cleared it.`);
-    events('job_reconciled', { key, t3ThreadId: saved.t3ThreadId, unposted });
+    logger.info(`${key} was saved as running, but T3 thread ${saved.threadId} isn't: cleared it.`);
+    events('job_reconciled', { key, t3ThreadId: saved.threadId, unposted });
   };
 
   /**

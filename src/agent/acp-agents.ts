@@ -52,9 +52,14 @@ export interface AgentBackendSettings {
   agent: string | null;
   /** Agents the owner added in the file, or built-in ones they changed (same id). */
   custom: AcpAgent[];
+  /** The model the owner picked per agent id; the agent's own default when absent. */
+  models: Record<string, string>;
 }
 
-const DEFAULTS: AgentBackendSettings = { backend: 't3', agent: null, custom: [] };
+const DEFAULTS: AgentBackendSettings = { backend: 't3', agent: null, custom: [], models: {} };
+
+/** A model name as an agent takes it: letters, digits and `-._:/[]`, never a flag. */
+const isModel = (value: unknown): value is string => typeof value === 'string' && /^[\w.:/[\]-]{1,80}$/.test(value) && !value.startsWith('-');
 
 const agentFrom = (value: unknown): AcpAgent | null => {
   if (!isRecord(value) || typeof value.id !== 'string' || typeof value.command !== 'string' || !value.command.trim()) return null;
@@ -71,16 +76,24 @@ export const readAgentBackend = (profileDir: string): AgentBackendSettings => {
   if (!isRecord(value)) return DEFAULTS;
   const custom = Array.isArray(value.agents) ? value.agents.map(agentFrom).filter((agent): agent is AcpAgent => agent !== null) : [];
   const agent = typeof value.agent === 'string' ? value.agent : null;
-  return { backend: value.backend === 'acp' && agent ? 'acp' : 't3', agent, custom };
+  const models = isRecord(value.models) ? Object.fromEntries(Object.entries(value.models).filter((entry): entry is [string, string] => isModel(entry[1]))) : {};
+  return { backend: value.backend === 'acp' && agent ? 'acp' : 't3', agent, custom, models };
 };
 
 /** Saves the owner's choice, keeping the agents they added. */
-export const writeAgentBackend = (profileDir: string, choice: { backend: 't3' | 'acp'; agent?: string | null }): AgentBackendSettings => {
+export const writeAgentBackend = (profileDir: string, choice: { backend: 't3' | 'acp'; agent?: string | null; model?: string | null }): AgentBackendSettings => {
   const current = readAgentBackend(profileDir);
   if (choice.backend === 'acp' && !choice.agent) throw new Error('Pick an ACP agent.');
+  const model = choice.model?.trim();
+  if (model && !isModel(model)) throw new Error('That isn’t a model name.');
   let raw: Record<string, unknown> = {};
   try { const parsed = parseJson(readFileSync(join(profileDir, FILE), 'utf8')); if (isRecord(parsed)) raw = parsed; } catch { /* a new file */ }
-  const next = { ...raw, backend: choice.backend, agent: choice.backend === 'acp' ? choice.agent : current.agent };
+  // A model is the chosen agent's; an empty one goes back to the agent's default.
+  const models = { ...current.models };
+  if (choice.backend === 'acp' && choice.agent && choice.model !== undefined) {
+    if (model) models[choice.agent] = model; else delete models[choice.agent];
+  }
+  const next = { ...raw, backend: choice.backend, agent: choice.backend === 'acp' ? choice.agent : current.agent, models };
   writeFileAtomic(join(profileDir, FILE), `${JSON.stringify(next, null, 2)}\n`, { mode: 0o600 });
   return readAgentBackend(profileDir);
 };
@@ -131,4 +144,4 @@ export const agentChoices = (settings: AgentBackendSettings, path: string): AcpA
   acpAgents(settings).map((agent) => ({ id: agent.id, name: agent.name, command: [agent.command, ...agent.args].join(' '), installed: !('missing' in launchFor(agent, path)) }));
 
 /** Settings › Meetings' agent backend card: the choice, and every agent with whether it's installed. */
-export interface AgentBackendView { backend: 't3' | 'acp'; agent: string | null; agents: AcpAgentChoice[] }
+export interface AgentBackendView { backend: 't3' | 'acp'; agent: string | null; agents: AcpAgentChoice[]; models: Record<string, string> }

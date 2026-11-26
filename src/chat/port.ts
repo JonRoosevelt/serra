@@ -74,7 +74,8 @@ export type Notice =
   /** The thread carries on in a fresh T3 session because some knowledge it used changed. */
   | { kind: 'fresh-session' }
   /** The worker waits for something only T3 can show (a token, an approval, a form too big for the chat). */
-  | { kind: 'waiting-in-t3'; link: T3Link | null }
+  /** `where`: the app's Jobs screen, for a backend with no web link to answer in (ACP); absent: T3. */
+  | { kind: 'waiting-in-t3'; link: T3Link | null; where?: 'app' }
   /** Feedback on an answer to a question card. */
   | { kind: 'question-hint'; hint: 'choose' | 'invalid-answer' | 'changed' | 'not-sent' | 'unconfirmed' };
 
