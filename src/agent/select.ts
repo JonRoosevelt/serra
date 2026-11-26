@@ -1,0 +1,37 @@
+// Which backend a feature runs on: the owner's choice in `agent-backend.json` (src/agent/acp-agents.ts), read on every
+// run, so a change applies to the next one without a restart. T3 when nothing is chosen. Only meeting runs (and so
+// the weekly knowledge review) follow the choice for now; Slack jobs and app tasks stay on T3.
+import { loginEnvironment } from '../shell-path.ts';
+import { createAcpBackend, type AcpAgent } from './acp.ts';
+import { acpAgents, findCommand, readAgentBackend } from './acp-agents.ts';
+import type { AgentBackend } from './backend.ts';
+import { createT3Backend } from './t3.ts';
+
+/** The ACP agent the owner picked, or null when they run on T3. Throws when the pick is no longer in Serra's list. */
+export const chosenAcpAgent = (profileDir: string): AcpAgent | null => {
+  const settings = readAgentBackend(profileDir);
+  if (settings.backend !== 'acp') return null;
+  const agent = acpAgents(settings).find((entry) => entry.id === settings.agent);
+  if (!agent) throw new Error(`Serra has no ACP agent "${settings.agent}". Pick one in Settings › Meetings.`);
+  return agent;
+};
+
+/** The login environment an ACP agent runs in: the owner's shell, as T3 gives its providers, with Serra's search PATH. */
+const agentEnv = async (): Promise<NodeJS.ProcessEnv> => {
+  const login = await loginEnvironment();
+  return { ...(login.env ?? process.env), PATH: login.path };
+};
+
+/** A new backend for one run, as the owner chose it. */
+export const chosenBackend = (profileDir: string, { t3Bin, log }: { t3Bin: string; log?: (message: string) => void }): AgentBackend => {
+  const agent = chosenAcpAgent(profileDir);
+  return agent ? createAcpBackend({ agent, env: agentEnv, ...(log ? { log } : {}) }) : createT3Backend({ bin: t3Bin });
+};
+
+/** Who runs meetings on an ACP agent, for Settings › Meetings: read from files and PATH, never a model call. */
+export const acpRunner = async (agent: AcpAgent): Promise<{ label: string; model: null; ready: boolean; detail: string }> => {
+  const installed = findCommand(agent.command, (await loginEnvironment()).path) !== null;
+  return installed
+    ? { label: `${agent.name} (ACP)`, model: null, ready: true, detail: `Runs on ${agent.name} over ACP, on its own login and default model, in Serra’s own empty folder. A run in progress ends if Serra restarts.` }
+    : { label: `${agent.name} (ACP)`, model: null, ready: false, detail: `Serra can’t find \`${agent.command}\`. Install ${agent.name}’s ACP adapter, or pick T3.` };
+};

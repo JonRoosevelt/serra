@@ -3,6 +3,7 @@
 // never makes a model call: only the Test button does, one short T3 run per press.
 import { useCallback, useEffect, useState, type ComponentProps, type ReactNode } from 'react';
 import { FileText, LoaderCircle, RefreshCw } from 'lucide-react';
+import type { AgentBackendView } from '../../../../src/agent/acp-agents.ts';
 import type { MeetingRunner } from '../../../../src/meeting-runs.ts';
 import type { MeetingSettings } from '../../../../src/meeting-settings.ts';
 import type { MeetingProvider, ProviderStatus } from '../../../../src/meeting-sources.ts';
@@ -60,6 +61,56 @@ const SourceRow = ({ icon, label, how, status, action }: { icon: ReactNode; labe
     {action}
   </li>
 );
+
+/**
+ * Which agent runs meeting reads, extraction and the weekly review: T3 (the default) or an ACP agent found on this
+ * Mac. One picker. Reads files and PATH only; the choice applies to the next run.
+ */
+const AgentBackendCard = ({ onChanged }: { onChanged: () => void }) => {
+  const toast = useToast();
+  const [view, setView] = useState<AgentBackendView | null>(null);
+  const [saving, setSaving] = useState(false);
+  useEffect(() => {
+    const bridge = serra();
+    if (!bridge) return;
+    bridge.meetings.agentBackend().then(setView, (failure: unknown) => toast({ message: message(failure), tone: 'error' }));
+  }, [toast]);
+  if (!view) return null;
+  const value = view.backend === 'acp' && view.agent ? `acp:${view.agent}` : 't3';
+  const choose = async (next: string): Promise<void> => {
+    const bridge = serra();
+    if (!bridge) return;
+    setSaving(true);
+    try {
+      setView(await bridge.meetings.setAgentBackend(next === 't3' ? { backend: 't3' } : { backend: 'acp', agent: next.slice(4) }));
+      onChanged();
+    } catch (failure) { toast({ message: message(failure), tone: 'error' }); } finally { setSaving(false); }
+  };
+  return (
+    <Card title="Agent backend" description="Runs meeting reads and the weekly knowledge review. Jobs stay on T3.">
+      <div className="flex flex-col gap-1">
+        <label className="text-sm font-medium" htmlFor="agent-backend">Run on</label>
+        <select
+          id="agent-backend"
+          className="h-9 max-w-sm rounded-md border border-line-control bg-panel px-2 text-sm text-ink focus:outline-2 focus:outline-offset-1 focus:outline-focus disabled:opacity-60"
+          value={value}
+          disabled={saving}
+          onChange={(event) => void choose(event.target.value)}
+        >
+          <option value="t3">T3 (default)</option>
+          <optgroup label="ACP agent">
+            {view.agents.map((agent) => (
+              <option key={agent.id} value={`acp:${agent.id}`} disabled={!agent.installed}>
+                {agent.installed ? agent.name : `${agent.name} (not installed)`}
+              </option>
+            ))}
+          </optgroup>
+        </select>
+        {value !== 't3' && <p className="text-[13px] text-muted">Runs end if Serra restarts, and there’s no link to open them.</p>}
+      </div>
+    </Card>
+  );
+};
 
 export const Meetings = () => {
   const toast = useToast();
@@ -153,10 +204,11 @@ export const Meetings = () => {
           {settings.enabled && settings.acknowledged && <p className="text-xs text-muted">On since {new Date(settings.acknowledged.at).toLocaleDateString()}.</p>}
         </Card>
       )}
+      {settings && <AgentBackendCard onChanged={() => { if (settings.enabled) void check(); }} />}
       {settings?.enabled && (
         <Card
           title="Sources"
-          description="Serra reads Granola and Meet links in a T3 run, through the connections your AI provider in T3 already has. It never holds their keys. Test runs one short T3 run."
+          description="Serra reads Granola and Meet links in an agent run, through the connections your agent already has. It never holds their keys. Test runs one short run."
           actions={<Button size="sm" disabled={checking} icon={checking ? <LoaderCircle size={14} className="animate-spin" /> : <RefreshCw size={14} />} onClick={() => void check()}>Refresh</Button>}
         >
           {runner && (

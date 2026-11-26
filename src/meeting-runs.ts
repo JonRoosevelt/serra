@@ -293,7 +293,8 @@ export const createMeetingRuns = ({
       if (contents().length) log(`Serra's meetings folder had files in it, left by an earlier run. Moved them to ${moveAside()}.`);
       const threadId = await backend.start({
         workspace: { kind: 'folder', path: workspace, name: PROJECT_TITLE }, title, brief, readOnly: guarded,
-        ...(provider ? { provider } : {}), ...(model ? { model } : {}),
+        // The profile's worker names a T3 provider instance and model. An ACP agent runs on its own default.
+        ...(backend.id === 't3' && provider ? { provider } : {}), ...(backend.id === 't3' && model ? { model } : {}),
       });
       if (guarded) started = threadId;
       const first = await finish(backend, threadId, null);

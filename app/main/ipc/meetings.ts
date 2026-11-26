@@ -14,6 +14,9 @@ import { createMeetingRuns, meetingRunner, runnerIdentity } from '../../../src/m
 import { saveSourceTest, sourceStatuses } from '../../../src/meeting-source-tests.ts';
 import { PROVIDER_IDS, type MeetingProvider } from '../../../src/meeting-sources.ts';
 import { readT3Providers } from '../../../src/t3-providers.ts';
+import { agentChoices, readAgentBackend, writeAgentBackend, type AgentBackendView } from '../../../src/agent/acp-agents.ts';
+import { acpRunner, chosenAcpAgent, chosenBackend } from '../../../src/agent/select.ts';
+import { toolSearchPath } from '../../../src/shell-path.ts';
 import type { Handlers } from '../bridge.ts';
 import type { HandlerContext } from './context.ts';
 
@@ -55,9 +58,14 @@ export const meetingsHandlers = (context: HandlerContext, options: MeetingsHandl
       writeMeetingSettings(context.profileDir(), enabled);
       return settings();
     },
-    sources: () => {
+    sources: async () => {
       const t3Bin = profileT3Bin(context.profileDir());
       const chosen = worker();
+      let agent: ReturnType<typeof chosenAcpAgent>;
+      try { agent = chosenAcpAgent(context.profileDir()); } catch (error) {
+        return { runner: { label: 'ACP agent', model: null, ready: false, detail: errorMessage(error) }, sources: sourceStatuses(context.profileDir(), { instance: 'acp:', model: null }) };
+      }
+      if (agent) return { runner: await acpRunner(agent), sources: sourceStatuses(context.profileDir(), { instance: `acp:${agent.id}`, model: null }) };
       const t3 = readProviders();
       return {
         runner: meetingRunner(chosen, t3, existsSync(t3Bin)),
@@ -67,16 +75,32 @@ export const meetingsHandlers = (context: HandlerContext, options: MeetingsHandl
     testSource: (provider) => {
       const chosen = worker();
       const profileDir = context.profileDir();
-      // The runner as the test starts, so a T3 default changed mid-run can't claim this answer.
-      const runner = runnerIdentity(chosen, readProviders());
+      // The runner as the test starts, so a default changed mid-run can't claim this answer.
+      let agent: ReturnType<typeof chosenAcpAgent>;
+      try { agent = chosenAcpAgent(profileDir); } catch (error) { throw new Error(shortError(error)); }
+      const runner = agent ? { instance: `acp:${agent.id}`, model: null } : runnerIdentity(chosen, readProviders());
       return makeRuns({
         t3Bin: profileT3Bin(profileDir),
         ...(chosen?.provider ? { provider: chosen.provider } : {}), ...(chosen?.model ? { model: chosen.model } : {}),
+        ...(agent ? { backend: () => chosenBackend(profileDir, { t3Bin: profileT3Bin(profileDir) }) } : {}),
       }).checkSource(source(provider)).then((result) => saveSourceTest(profileDir, result, runner)).catch((error: unknown) => {
         // The screen gets a short reason; the full one (a command's output, paths) stays in the app's log.
         console.error(`[serra] meetings test failed: ${errorMessage(error)}`);
         throw new Error(shortError(error));
       });
+    },
+    agentBackend: async (): Promise<AgentBackendView> => {
+      const settings = readAgentBackend(context.profileDir());
+      return { backend: settings.backend, agent: settings.agent, agents: agentChoices(settings, await toolSearchPath()) };
+    },
+    setAgentBackend: async (choice): Promise<AgentBackendView> => {
+      if (!isRecord(choice) || (choice.backend !== 't3' && choice.backend !== 'acp')) throw new Error('Pick T3 or an ACP agent.');
+      const agent = choice.backend === 'acp' ? id(choice.agent, 'ACP agent') : null;
+      const path = await toolSearchPath();
+      const settings = readAgentBackend(context.profileDir());
+      if (agent && !agentChoices(settings, path).some((entry) => entry.id === agent && entry.installed)) throw new Error('That ACP agent isn’t installed on this Mac.');
+      const saved = writeAgentBackend(context.profileDir(), { backend: choice.backend, agent });
+      return { backend: saved.backend, agent: saved.agent, agents: agentChoices(saved, path) };
     },
     list: () => store().listMeetings(),
     history: () => store().history(),

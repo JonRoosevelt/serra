@@ -27,6 +27,7 @@ import type { InterviewPreview, StartedTask } from '../../src/tasks.ts';
 import type { MeetingReviewed, MeetingView } from '../../src/meeting-store.ts';
 import type { MeetingSettings } from '../../src/meeting-settings.ts';
 import type { MeetingRunner } from '../../src/meeting-runs.ts';
+import type { AgentBackendView } from '../../src/agent/acp-agents.ts';
 import type { MeetingProvider, ProviderStatus } from '../../src/meeting-sources.ts';
 import type { DetectedProject, OwnerConfirmed, ProfileDraft, ProfileSummary, SetupProgress, SlackManifest } from '../../src/setup.ts';
 // The one value import: a pure module, so the preload bundle stays free of Node.
@@ -366,6 +367,10 @@ export interface SerraApi {
     discardMeeting(id: string): void;
     /** Remove everything a meeting added, everywhere. Can't be undone. */
     forget(id: string): { pages: string[]; backups: number; snapshots: number };
+    /** Which agent backend meeting runs use (T3 by default), and the ACP agents found on this Mac. Reads files and PATH only. */
+    agentBackend(): AgentBackendView;
+    /** Picks T3, or an installed ACP agent, for the next meeting run. */
+    setAgentBackend(choice: { backend: 't3' | 'acp'; agent?: string | null }): AgentBackendView;
   };
 }
 
@@ -441,7 +446,7 @@ export const bridgeMethods = {
   diagnostics: methods<'diagnostics'>()(['run', 'logTail']),
   people: methods<'people'>()(['add']),
   tasks: methods<'tasks'>()(['preview', 'start', 'previewInterview', 'startInterview']),
-  meetings: methods<'meetings'>()(['settings', 'setEnabled', 'sources', 'testSource', 'list', 'history', 'approve', 'discard', 'discardMeeting', 'forget']),
+  meetings: methods<'meetings'>()(['settings', 'setEnabled', 'sources', 'testSource', 'list', 'history', 'approve', 'discard', 'discardMeeting', 'forget', 'agentBackend', 'setAgentBackend']),
 } satisfies { [N in Namespace]: readonly (keyof SerraApi[N])[] };
 
 const pushChannels = ['status', 'event', 'releaseLog', 'appUpdate', 'navigate', 'proposals', 'jobs', 'names'] as const satisfies readonly (keyof SerraPushes)[];
